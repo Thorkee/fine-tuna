@@ -66,10 +66,14 @@ export interface SourcePolicyOverrides {
 }
 
 const DEFAULT_PREFERRED_BASE_MODELS = [
-    'meta-llama/Llama-3.1-8B-Instruct',
-    'Qwen/Qwen2.5-7B-Instruct',
-    'mistralai/Mistral-7B-Instruct-v0.3',
-    'google/gemma-2-9b-it',
+    'mistralai/Magistral-Small-2509',
+    'mistralai/Mistral-Small-3.2-24B-Instruct-2506',
+    'mistralai/Devstral-Small-2505',
+    'mistralai/Mistral-Small-3.1-24B-Instruct-2503',
+    'mistralai/Mistral-Nemo-Instruct-2407',
+    'mistralai/Mistral-Large-Instruct-2407',
+    'mistralai/Mixtral-8x22B-Instruct-v0.1',
+    'mistralai/Mixtral-8x7B-Instruct-v0.1',
 ];
 
 const DEFAULT_DATASET_TIER1_DOMAINS = [

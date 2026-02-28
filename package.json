@@ -6,6 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
+    "logs": "docker compose logs --tail=200 app",
+    "logs:follow": "docker compose logs -f app",
     "lint": "eslint",
     "test": "vitest run",
     "test:source-policy": "vitest run src/lib/agent/__tests__/source-policy.test.ts",

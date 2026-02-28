@@ -47,7 +47,10 @@ ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 
 COPY package.json package-lock.json next.config.ts ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm ci --omit=dev \
+  && npm install --no-save --omit= typescript \
+  && node -e "require.resolve('typescript')" \
+  && npm cache clean --force
 
 COPY --from=build /app/.next ./.next
 COPY --from=build /app/public ./public

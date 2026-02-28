@@ -136,6 +136,29 @@ function buildModelUsageHints(modelId: string, url: string): Array<Record<string
     return hints;
 }
 
+function isMistralFamilyCandidate(input: { modelId: string; title: string; url: string; domain?: string }): boolean {
+    const haystack = [
+        input.modelId,
+        input.title,
+        input.url,
+        input.domain ?? '',
+    ].join(' ').toLowerCase();
+    if (!haystack) return false;
+
+    const signals = [
+        'mistralai/',
+        'mistral',
+        'mixtral',
+        'magistral',
+        'ministral',
+        'devstral',
+        'codestral',
+        'pixtral',
+        'voxtral',
+    ];
+    return signals.some(signal => haystack.includes(signal));
+}
+
 async function exaSearch(params: {
     apiKey: string;
     query: string;
@@ -212,7 +235,7 @@ export const modelSearchTool: Tool = {
     definition: {
         name: 'model_search',
         description:
-            'Find and rank open-source models with explicit fallback order: Hugging Face first, then GitHub/Kaggle, then Exa/Firecrawl open-web discovery, then Desktop escalation for blockers. Returns scored candidates, fallback reasons, and benchmark evidence.',
+            'Find and rank Mistral-family open-source models with explicit fallback order: Hugging Face first, then GitHub/Kaggle, then Exa/Firecrawl open-web discovery, then Desktop escalation for blockers. Returns scored candidates, fallback reasons, and benchmark evidence.',
         parameters: {
             type: 'object',
             properties: {
@@ -266,7 +289,19 @@ export const modelSearchTool: Tool = {
 
             let tierBestScore: number | null = null;
             let tierViableCandidates = 0;
+            let tierMistralResults = 0;
             for (const row of search.rows) {
+                const modelId = extractLikelyModelId(row.url) ?? row.title;
+                if (!isMistralFamilyCandidate({
+                    modelId,
+                    title: row.title,
+                    url: row.url,
+                    domain: row.domain,
+                })) {
+                    continue;
+                }
+                tierMistralResults += 1;
+
                 const key = modelKey(row);
                 const text = `${row.highlights?.join('\n') ?? ''}\n${row.textSnippet ?? ''}`;
                 const benchmarkSignals = benchmarkSignalCount(`${row.title}\n${text}`);
@@ -281,7 +316,7 @@ export const modelSearchTool: Tool = {
                 const previous = candidates.get(key);
                 if (previous && (previous.score ?? 0) >= (row.score ?? 0)) continue;
                 candidates.set(key, {
-                    modelId: extractLikelyModelId(row.url) ?? row.title,
+                    modelId,
                     title: row.title,
                     url: row.url,
                     domain: row.domain,
@@ -298,7 +333,7 @@ export const modelSearchTool: Tool = {
             const attempt = buildTierAttemptTelemetry({
                 tier,
                 includeDomains: includeDomains && includeDomains.length > 0 ? includeDomains : null,
-                numResults: search.rows.length,
+                numResults: tierMistralResults,
                 minResultsRequired: Math.max(1, policy.minResultsPerTier),
                 viableCandidates: tierViableCandidates,
                 bestScore: tierBestScore,

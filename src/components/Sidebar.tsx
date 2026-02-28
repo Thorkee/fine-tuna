@@ -707,8 +707,8 @@ export default function Sidebar({
                                 <motion.div
                                     className="relative"
                                     animate={{
-                                        width: 150,
-                                        height: 16,
+                                        width: 220,
+                                        height: 36,
                                         opacity: 1,
                                     }}
                                     transition={{ type: "spring", stiffness: 280, damping: 32, mass: 0.8 }}
@@ -718,8 +718,8 @@ export default function Sidebar({
                                         src="/tuna.png"
                                         alt="tuna"
                                         fill
-                                        sizes="150px"
-                                        className="brand-logo object-contain object-left"
+                                        sizes="220px"
+                                        className="object-contain object-left"
                                         priority={false}
                                     />
                                 </motion.div>
@@ -1035,7 +1035,7 @@ export default function Sidebar({
                                             </div>
                                             {needsOnboarding && (
                                                 <div className="mt-0.5 text-[11px] text-[hsl(var(--accent-green))]">
-                                                    Finish setup
+                                                    Complete onboarding
                                                 </div>
                                             )}
                                         </div>
@@ -1075,7 +1075,7 @@ export default function Sidebar({
                                         onClick={handlePersonalize}
                                         className="w-full text-left px-3 py-2.5 text-sm transition-colors text-primary hover:bg-tertiary"
                                     >
-                                        {needsOnboarding ? "Finish setup" : "Settings"}
+                                        {needsOnboarding ? "Complete onboarding" : "Settings"}
                                     </button>
                                     <button
                                         onClick={handleOpenCredits}

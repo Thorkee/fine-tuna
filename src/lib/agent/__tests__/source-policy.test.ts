@@ -27,6 +27,15 @@ describe('source policy defaults', () => {
         expect(modelTier2).toContain('github.com');
         expect(modelTier2).toContain('kaggle.com');
     });
+
+    it('keeps preferred base-model pool Mistral-only', () => {
+        const policy = buildSourcePolicySettings();
+        const nonMistral = policy.preferredBaseModels.filter((modelId) => {
+            const normalized = modelId.toLowerCase();
+            return !normalized.startsWith('mistralai/');
+        });
+        expect(nonMistral).toHaveLength(0);
+    });
 });
 
 describe('tier fallback telemetry', () => {

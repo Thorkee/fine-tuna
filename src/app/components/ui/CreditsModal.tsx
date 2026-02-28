@@ -5,9 +5,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   Calendar,
   Check,
-  Compass,
   Copy,
-  Cpu,
   LineChart,
   Link2,
   Palette,
@@ -50,7 +48,6 @@ export type SettingsTab =
 
 export type ProfileTab = "profile" | "knowledge";
 
-type Goal = "train" | "analyze" | "compare" | "explore";
 export type IntegrationProvider = "huggingface" | "github" | "kaggle" | "firecrawl";
 type HuggingFaceSkillKey =
   | "search_hub"
@@ -95,13 +92,6 @@ function parseSignedCredits(value: unknown): number {
 
 function parseBalance(value: unknown): number {
   return Math.max(0, parseSignedCredits(value));
-}
-
-function parseGoal(value: unknown): Goal | null {
-  if (value === "train" || value === "analyze" || value === "compare" || value === "explore") {
-    return value;
-  }
-  return null;
 }
 
 function parseProjectMode(value: unknown): ProjectMode | null {
@@ -194,33 +184,6 @@ function getInitials(label: string): string {
   if (parts.length === 1) return parts[0].slice(0, 1).toUpperCase();
   return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
 }
-
-const goalOptions: Array<{ id: Goal; title: string; description: string; icon: LucideIcon }> = [
-  {
-    id: "train",
-    title: "Train & fine-tune",
-    description: "End-to-end training with scripts, compute, and exports.",
-    icon: Cpu,
-  },
-  {
-    id: "analyze",
-    title: "Analyze data",
-    description: "EDA and preprocessing insights to prepare training.",
-    icon: LineChart,
-  },
-  {
-    id: "compare",
-    title: "Compare providers",
-    description: "Pick the best provider, GPU, or cluster setup.",
-    icon: Compass,
-  },
-  {
-    id: "explore",
-    title: "Just exploring",
-    description: "See the full vibe-tuning workflow.",
-    icon: Sparkles,
-  },
-];
 
 const DEFAULT_HF_SKILLS: HuggingFaceSkillState = {
   search_hub: true,
@@ -452,7 +415,6 @@ export default function CreditsModal(props: {
   const [occupation, setOccupation] = useState("");
   const [about, setAbout] = useState("");
   const [instructions, setInstructions] = useState("");
-  const [goal, setGoal] = useState<Goal | null>(null);
   const [defaultMode, setDefaultMode] = useState<ProjectMode>(storedMode);
   const [basePreferences, setBasePreferences] = useState<Record<string, unknown>>({});
   const [savingProfile, setSavingProfile] = useState(false);
@@ -621,7 +583,6 @@ export default function CreditsModal(props: {
         setOccupation(typeof prefs.occupation === "string" ? prefs.occupation : "");
         setAbout(typeof prefs.about === "string" ? prefs.about : "");
         setInstructions(typeof prefs.instructions === "string" ? prefs.instructions : "");
-        setGoal(parseGoal(prefs.goal));
         const mcpPref = readMcpEnabledServers(prefs);
         setMcpEnabledServers(mcpPref.enabledServers);
         const rawMcp = isRecord(prefs.mcp) ? (prefs.mcp as Record<string, unknown>) : null;
@@ -770,7 +731,6 @@ export default function CreditsModal(props: {
         occupation: normalizePrefString(occupation),
         about: normalizePrefString(about),
         instructions: normalizePrefString(instructions),
-        goal: goal ?? null,
         default_mode: defaultMode ?? null,
         skills: {
           ...(isRecord(basePreferences.skills) ? basePreferences.skills : {}),
@@ -794,7 +754,6 @@ export default function CreditsModal(props: {
       about,
       basePreferences,
       defaultMode,
-      goal,
       huggingFaceSkills,
       instructions,
       availableMcpIds,
@@ -1893,209 +1852,126 @@ export default function CreditsModal(props: {
                     </div>
                   ) : activeTab === "personalization" ? (
                     <div className="space-y-4">
-                      <div className="flex items-center gap-4 border-b border-black/10 dark:border-white/10 pb-2">
-                        <button
-                          type="button"
-                          onClick={() => setProfileTab("profile")}
-                          className={cn(
-                            "text-sm font-medium",
-                            profileTab === "profile"
-                              ? isDark
-                                ? "text-white"
-                                : "text-black"
-                              : isDark
-                                ? "text-white/50"
-                                : "text-black/50"
-                          )}
-                        >
-                          Profile
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setProfileTab("knowledge")}
-                          className={cn(
-                            "text-sm font-medium",
-                            profileTab === "knowledge"
-                              ? isDark
-                                ? "text-white"
-                                : "text-black"
-                              : isDark
-                                ? "text-white/50"
-                                : "text-black/50"
-                          )}
-                        >
-                          Knowledge
-                        </button>
+                      <div
+                        className={cn(
+                          "rounded-2xl border px-4 py-3 text-xs",
+                          isDark ? "border-white/10 bg-white/5 text-white/70" : "border-black/10 bg-white text-black/60"
+                        )}
+                      >
+                        Post-onboarding profile preferences. Core onboarding fields live in the setup flow.
                       </div>
-
-                      {profileTab === "profile" ? (
-                        <div className="space-y-4">
-                          <div>
-                            <label className={cn("text-xs", isDark ? "text-white/60" : "text-black/50")}>Name</label>
-                            <input
-                              value={profileName}
-                              readOnly
-                              aria-readonly="true"
-                              placeholder="Add your name in Account"
-                              className={cn(
-                                "mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none transition-colors",
-                                "cursor-default",
-                                isDark
-                                  ? "border-white/10 bg-white/5 text-white/80"
-                                  : "border-black/10 bg-white text-black/70"
-                              )}
-                            />
-                            <div className={cn("mt-1 text-[11px]", isDark ? "text-white/45" : "text-black/45")}>
-                              Edit your name in Account.
-                            </div>
-                          </div>
-                          <div className="grid gap-3 sm:grid-cols-2">
-                            <div>
-                              <label className={cn("text-xs", isDark ? "text-white/60" : "text-black/50")}>
-                                Nickname
-                              </label>
-                              <input
-                                value={nickname}
-                                onChange={(e) => setNickname(e.target.value)}
-                                placeholder="What should we call you?"
-                                className={cn(
-                                  "mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none transition-colors",
-                                  isDark
-                                    ? "border-white/10 bg-white/5 text-white focus:border-white/30"
-                                    : "border-black/10 bg-white text-black focus:border-black/30"
-                                )}
-                              />
-                            </div>
-                            <div>
-                              <label className={cn("text-xs", isDark ? "text-white/60" : "text-black/50")}>
-                                Occupation
-                              </label>
-                              <input
-                                value={occupation}
-                                onChange={(e) => setOccupation(e.target.value)}
-                                placeholder="e.g., Product Designer"
-                                className={cn(
-                                  "mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none transition-colors",
-                                  isDark
-                                    ? "border-white/10 bg-white/5 text-white focus:border-white/30"
-                                    : "border-black/10 bg-white text-black focus:border-black/30"
-                                )}
-                              />
-                            </div>
-                          </div>
-                          <div>
-                            <label className={cn("text-xs", isDark ? "text-white/60" : "text-black/50")}>
-                              More about you
-                            </label>
-                            <textarea
-                              value={about}
-                              onChange={(e) => setAbout(e.target.value)}
-                              placeholder="Background, preferences, or context"
-                              rows={3}
-                              className={cn(
-                                "mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none transition-colors",
-                                isDark
-                                  ? "border-white/10 bg-white/5 text-white focus:border-white/30"
-                                  : "border-black/10 bg-white text-black focus:border-black/30"
-                              )}
-                            />
-                          </div>
-                          <div>
-                            <label className={cn("text-xs", isDark ? "text-white/60" : "text-black/50")}>
-                              Custom instructions
-                            </label>
-                            <textarea
-                              value={instructions}
-                              onChange={(e) => setInstructions(e.target.value)}
-                              placeholder="How should Tuna respond?"
-                              rows={3}
-                              className={cn(
-                                "mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none transition-colors",
-                                isDark
-                                  ? "border-white/10 bg-white/5 text-white focus:border-white/30"
-                                  : "border-black/10 bg-white text-black focus:border-black/30"
-                              )}
-                            />
-                          </div>
-                          <div>
-                            <div className={cn("text-xs", isDark ? "text-white/60" : "text-black/50")}>
-                              What are you here to do first?
-                            </div>
-                            <div className="mt-2 grid gap-3 sm:grid-cols-2">
-                              {goalOptions.map((option) => {
-                                const selected = goal === option.id;
-                                const Icon = option.icon;
-                                return (
-                                  <button
-                                    key={option.id}
-                                    type="button"
-                                    onClick={() => setGoal(option.id)}
-                                    className={cn(
-                                      "rounded-xl border px-3 py-3 text-left transition-colors overflow-hidden min-h-[96px] max-h-[96px]",
-                                      selected
-                                        ? isDark
-                                          ? "border-white/40 bg-white/10 text-white"
-                                          : "border-black/30 bg-black/5 text-black"
-                                        : isDark
-                                          ? "border-white/10 bg-white/5 text-white/70 hover:bg-white/10"
-                                          : "border-black/10 bg-white text-black/70 hover:bg-black/5"
-                                    )}
-                                  >
-                                    <div className="flex items-start gap-2">
-                                      <div
-                                        className={cn(
-                                          "mt-0.5 rounded-md p-1.5",
-                                          selected
-                                            ? isDark
-                                              ? "bg-white/15"
-                                              : "bg-black/5"
-                                            : isDark
-                                              ? "bg-white/10"
-                                              : "bg-black/5"
-                                        )}
-                                      >
-                                        <Icon className="h-4 w-4" />
-                                      </div>
-                                      <div className="min-w-0">
-                                        <div className="text-sm font-medium line-clamp-1">{option.title}</div>
-                                        <div className={cn("mt-1 text-xs line-clamp-2", isDark ? "text-white/50" : "text-black/50")}>
-                                          {option.description}
-                                        </div>
-                                      </div>
-                                    </div>
-                                  </button>
-                                );
-                              })}
-                            </div>
-                          </div>
-                          <div className="flex justify-end">
-                            <button
-                              type="button"
-                              onClick={savePersonalization}
-                              disabled={!userId || savingPersonalization}
-                              className={cn(
-                                "rounded-full px-4 py-2 text-xs font-semibold transition-opacity disabled:opacity-60",
-                                isDark
-                                  ? "bg-white/10 text-white hover:bg-white/20"
-                                  : "bg-black text-white hover:bg-black/90"
-                              )}
-                            >
-                              {savingPersonalization ? "Saving…" : "Save"}
-                            </button>
-                          </div>
-                        </div>
-                      ) : (
+                      {profileTab === "knowledge" ? (
                         <div
                           className={cn(
-                            "rounded-2xl border px-4 py-6 text-sm",
-                            isDark
-                              ? "border-white/10 bg-white/5 text-white/70"
-                              : "border-black/10 bg-white text-black/60"
+                            "rounded-2xl border px-4 py-3 text-xs",
+                            isDark ? "border-white/10 bg-white/5 text-white/70" : "border-black/10 bg-white text-black/60"
                           )}
                         >
-                          No knowledge yet.
+                          Knowledge preferences are not configured here.
                         </div>
-                      )}
+                      ) : null}
+                      <div className="space-y-4">
+                        <div>
+                          <label className={cn("text-xs", isDark ? "text-white/60" : "text-black/50")}>Name</label>
+                          <input
+                            value={profileName}
+                            readOnly
+                            aria-readonly="true"
+                            placeholder="Add your name in Account"
+                            className={cn(
+                              "mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none transition-colors",
+                              "cursor-default",
+                              isDark
+                                ? "border-white/10 bg-white/5 text-white/80"
+                                : "border-black/10 bg-white text-black/70"
+                            )}
+                          />
+                          <div className={cn("mt-1 text-[11px]", isDark ? "text-white/45" : "text-black/45")}>
+                            Edit your name in Account.
+                          </div>
+                        </div>
+                        <div className="grid gap-3 sm:grid-cols-2">
+                          <div>
+                            <label className={cn("text-xs", isDark ? "text-white/60" : "text-black/50")}>
+                              Nickname
+                            </label>
+                            <input
+                              value={nickname}
+                              onChange={(e) => setNickname(e.target.value)}
+                              placeholder="What should we call you?"
+                              className={cn(
+                                "mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none transition-colors",
+                                isDark
+                                  ? "border-white/10 bg-white/5 text-white focus:border-white/30"
+                                  : "border-black/10 bg-white text-black focus:border-black/30"
+                              )}
+                            />
+                          </div>
+                          <div>
+                            <label className={cn("text-xs", isDark ? "text-white/60" : "text-black/50")}>
+                              Occupation
+                            </label>
+                            <input
+                              value={occupation}
+                              onChange={(e) => setOccupation(e.target.value)}
+                              placeholder="e.g., Product Designer"
+                              className={cn(
+                                "mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none transition-colors",
+                                isDark
+                                  ? "border-white/10 bg-white/5 text-white focus:border-white/30"
+                                  : "border-black/10 bg-white text-black focus:border-black/30"
+                              )}
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <label className={cn("text-xs", isDark ? "text-white/60" : "text-black/50")}>
+                            More about you
+                          </label>
+                          <textarea
+                            value={about}
+                            onChange={(e) => setAbout(e.target.value)}
+                            placeholder="Background, preferences, or context"
+                            rows={3}
+                            className={cn(
+                              "mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none transition-colors",
+                              isDark
+                                ? "border-white/10 bg-white/5 text-white focus:border-white/30"
+                                : "border-black/10 bg-white text-black focus:border-black/30"
+                            )}
+                          />
+                        </div>
+                        <div>
+                          <label className={cn("text-xs", isDark ? "text-white/60" : "text-black/50")}>
+                            Custom instructions
+                          </label>
+                          <textarea
+                            value={instructions}
+                            onChange={(e) => setInstructions(e.target.value)}
+                            placeholder="How should Tuna respond?"
+                            rows={3}
+                            className={cn(
+                              "mt-1 w-full rounded-lg border px-3 py-2 text-sm outline-none transition-colors",
+                              isDark
+                                ? "border-white/10 bg-white/5 text-white focus:border-white/30"
+                                : "border-black/10 bg-white text-black focus:border-black/30"
+                            )}
+                          />
+                        </div>
+                        <div className="flex justify-end">
+                          <button
+                            type="button"
+                            onClick={savePersonalization}
+                            disabled={!userId || savingPersonalization}
+                            className={cn(
+                              "rounded-full px-4 py-2 text-xs font-semibold transition-opacity disabled:opacity-60",
+                              isDark ? "bg-white/10 text-white hover:bg-white/20" : "bg-black text-white hover:bg-black/90"
+                            )}
+                          >
+                            {savingPersonalization ? "Saving…" : "Save"}
+                          </button>
+                        </div>
+                      </div>
                     </div>
                   ) : activeTab === "skills" ? (
                     <div className="space-y-4">

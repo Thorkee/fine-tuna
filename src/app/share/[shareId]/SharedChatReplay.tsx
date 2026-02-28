@@ -2,6 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
+import Link from "next/link";
 import dynamic from "next/dynamic";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -1736,7 +1737,7 @@ export default function SharedChatReplay(props: { shareId: string }) {
           <div className="flex items-center justify-between gap-4">
             {/* Left: Brand + title */}
             <div className="flex items-center gap-3 min-w-0">
-              <a
+              <Link
                 href="/"
                 className="shrink-0 flex items-center gap-2 transition-opacity hover:opacity-80"
                 title="tuna"
@@ -1744,12 +1745,12 @@ export default function SharedChatReplay(props: { shareId: string }) {
                 <Image
                   src="/tuna.png"
                   alt="tuna"
-                  width={28}
-                  height={28}
-                  className="rounded-md object-contain"
+                  width={56}
+                  height={32}
+                  className="object-contain"
                   priority
                 />
-              </a>
+              </Link>
               <div className="min-w-0">
                 <div className="text-[15px] sm:text-[16px] font-semibold tracking-tight truncate">{headerTitle}</div>
                 {snapshotCreatedAt ? (
@@ -1891,15 +1892,15 @@ export default function SharedChatReplay(props: { shareId: string }) {
             <div className="flex flex-col items-center gap-4">
               <div className="relative">
                 <div className={cn(
-                  "w-12 h-12 rounded-2xl flex items-center justify-center",
+                  "w-20 h-12 rounded-2xl flex items-center justify-center",
                   isDark ? "bg-white/5" : "bg-zinc-100"
                 )}>
                   <Image
                     src="/tuna.png"
                     alt=""
-                    width={24}
+                    width={44}
                     height={24}
-                    className="rounded-sm object-contain opacity-60"
+                    className="object-contain opacity-70"
                   />
                 </div>
                 <span className={cn(
@@ -2646,9 +2647,12 @@ export default function SharedChatReplay(props: { shareId: string }) {
         )}>
           <div className="flex items-center justify-between gap-4">
             <div className={cn("text-[12px]", isDark ? "text-white/40" : "text-zinc-400")}>
-              Built with <a href="/" className="font-medium text-emerald-600 dark:text-emerald-400 hover:underline">tuna</a>
+              Built with{" "}
+              <Link href="/" className="font-medium text-emerald-600 dark:text-emerald-400 hover:underline">
+                tuna
+              </Link>
             </div>
-            <a
+            <Link
               href="/"
               className={cn(
                 "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium transition-colors",
@@ -2659,7 +2663,7 @@ export default function SharedChatReplay(props: { shareId: string }) {
             >
               Try Tuna
               <ExternalLink className="w-3 h-3" />
-            </a>
+            </Link>
           </div>
         </footer>
       )}

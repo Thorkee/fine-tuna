@@ -166,10 +166,22 @@ function buildConversation(
 ): { system?: SystemContentBlock[]; conversation: BedrockMessage[] } {
   const systemLines: string[] = [];
   const conversation: BedrockMessage[] = [];
+  // Bedrock tool protocol expects toolResult blocks for a prior assistant tool_use
+  // turn to be supplied together in the next user message content.
+  let pendingToolResults: BedrockMessage['content'] = [];
 
   const mapToolName = (name: string): string => {
     if (!mappings) return toSafeToolName(name);
     return mappings.originalToSafe.get(name) ?? toSafeToolName(name);
+  };
+
+  const flushPendingToolResults = () => {
+    if (pendingToolResults.length === 0) return;
+    conversation.push({
+      role: 'user',
+      content: pendingToolResults,
+    });
+    pendingToolResults = [];
   };
 
   for (const message of messages) {
@@ -183,20 +195,18 @@ function buildConversation(
       const toolUseId = asNonEmptyString(message.tool_call_id) ?? randomUUID();
       const rawContent = typeof message.content === 'string' ? message.content : '';
       const result = toToolResultContent(rawContent);
-      conversation.push({
-        role: 'user',
-        content: [
-          {
-            toolResult: {
-              toolUseId,
-              content: result.content,
-              status: result.status,
-            },
-          },
-        ],
+      pendingToolResults.push({
+        toolResult: {
+          toolUseId,
+          content: result.content,
+          status: result.status,
+        },
       });
       continue;
     }
+
+    // Any non-tool message closes a pending tool-result bundle.
+    flushPendingToolResults();
 
     const content: BedrockMessage['content'] = [];
     const text = asNonEmptyString(message.content);
@@ -227,6 +237,9 @@ function buildConversation(
       content,
     });
   }
+
+  // Flush tool results at end of history as well.
+  flushPendingToolResults();
 
   const system = systemLines.length > 0
     ? [{ text: systemLines.join('\n\n') }]

@@ -11,8 +11,16 @@ services:
       CHOKIDAR_USEPOLLING: "true"
       # Inside the container there's no Docker daemon; use the local Python installed in the image.
       PYTHON_SANDBOX_MODE: "local"
+      # Allow AWS SDK (Bedrock/SageMaker) to read shared config when needed.
+      AWS_SDK_LOAD_CONFIG: "1"
+      # Forward short-lived session credentials when exported on the host
+      # (e.g. via `aws configure export-credentials --format env-no-export`).
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+      AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
     volumes:
       - .:/app
       - /app/node_modules
       - /app/.next
+      - ${HOME}/.aws:/root/.aws:ro
     command: npm run dev -- -H 0.0.0.0

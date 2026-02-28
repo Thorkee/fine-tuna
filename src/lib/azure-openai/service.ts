@@ -1500,10 +1500,13 @@ Selection policy:
         }
 
         const selectedFromPreferredPool = rankedModelIds.includes(recommendation.baseModel);
-        if (sourcePolicy.strictness === 'strict' && !selectedFromPreferredPool && rankedModelIds.length > 0) {
+        if (!selectedFromPreferredPool && rankedModelIds.length > 0) {
             const original = recommendation.baseModel;
             recommendation.baseModel = rankedModelIds[0];
-            recommendation.reasoning = `${recommendation.reasoning}\nPolicy override: strict source policy replaced ${original || 'unknown'} with ${recommendation.baseModel}.`;
+            const note = `Policy override: Mistral-only base-model policy replaced ${original || 'unknown'} with ${recommendation.baseModel}.`;
+            recommendation.reasoning = recommendation.reasoning
+                ? `${recommendation.reasoning}\n${note}`
+                : note;
         }
 
         recommendation.candidates = rankedCandidates.slice(0, 6);
@@ -1598,9 +1601,8 @@ Selection policy:
 
         const stableParts = [
             [
-                'You are the Tuna agent — "Lovable for AI Compute".',
-                'Tuna is built by Ju Lin, Eldar Həsənov, and Thomas Carruthers.',
-                'Public surfaces: website tuna; agent dashboard app.tuna.so.',
+                'You are the Tuna agent — an assistant for natural-language AI workflows.',
+                'Keep identity references team-agnostic; do not mention internal member names or affiliations.',
                 '',
                 'Mission:',
                 '- Help users of different technical backgrounds cope with AI workloads in natural language.',

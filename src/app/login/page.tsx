@@ -162,9 +162,9 @@ function LoginPageInner() {
                     <Image
                         src="/tuna.png"
                         alt="tuna logo"
-                        width={216}
-                        height={117}
-                        className="brand-logo h-6 w-auto object-contain opacity-85"
+                        width={220}
+                        height={124}
+                        className="h-14 w-auto object-contain opacity-85"
                         priority
                     />
                 </motion.div>
@@ -179,11 +179,11 @@ function LoginPageInner() {
                     <div className="w-full rounded-3xl border border-default bg-[hsl(var(--bg-elevated)/0.85)] p-6 shadow-sm backdrop-blur-xl sm:p-8">
 
                         <h1 className="text-2xl sm:text-3xl font-semibold text-center mb-2 text-zinc-900 dark:text-white tracking-tight">
-                            {step === "email" ? "Welcome back" : "Enter code"}
+                            {step === "email" ? "Welcome to Tuna" : "Enter code"}
                         </h1>
                         <p className="text-center text-sm text-zinc-500 dark:text-zinc-400">
                             {step === "email"
-                                ? "Sign in with email or Google."
+                                ? "Sign in to continue. New accounts complete a short setup."
                                 : "Enter the 8‑digit code from your email."}
                         </p>
 

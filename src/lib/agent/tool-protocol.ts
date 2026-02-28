@@ -36,7 +36,20 @@ export function sanitizeMessagesForToolProtocol(messages: Message[]): Message[] 
   let toolMessages: Message[] = [];
   let seenToolIds = new Set<string>();
 
-  const flushPending = () => {
+  const dropTrailingToolExchange = () => {
+    if (out.length === 0) return;
+    // Drop trailing tool messages.
+    while (out.length > 0 && out[out.length - 1]?.role === 'tool') {
+      out.pop();
+    }
+    // If those tool messages belonged to a preceding assistant(tool_calls), drop it too.
+    const last = out[out.length - 1];
+    if (last && hasAssistantToolCalls(last)) {
+      out.pop();
+    }
+  };
+
+  const flushPending = (nextRole?: Message['role']) => {
     if (!pendingAssistant) return;
 
     const required = requiredIds ?? new Set<string>();
@@ -44,9 +57,16 @@ export function sanitizeMessagesForToolProtocol(messages: Message[]): Message[] 
     const hasAnyTool = toolMessages.length > 0;
     const satisfiesAll =
       !hasRequired || Array.from(required).every(id => seenToolIds.has(id));
+    const followedByNonAssistant = typeof nextRole === 'string' && nextRole !== 'assistant';
 
-    if (hasAnyTool && satisfiesAll) {
+    // Bedrock requires the assistant response immediately after tool results.
+    // If a user/system message appears before that assistant response, drop the
+    // whole tool exchange so the history remains replayable. Also drop any
+    // trailing prior tool exchange that would now end directly before user/system.
+    if (hasAnyTool && satisfiesAll && !followedByNonAssistant) {
       out.push(pendingAssistant, ...toolMessages);
+    } else if (followedByNonAssistant) {
+      dropTrailingToolExchange();
     }
 
     pendingAssistant = null;
@@ -60,15 +80,22 @@ export function sanitizeMessagesForToolProtocol(messages: Message[]): Message[] 
       if (m.role === 'tool') {
         // tool_call_id is required by the tool-call protocol.
         if (typeof m.tool_call_id === 'string' && m.tool_call_id.trim()) {
+          const id = m.tool_call_id;
+          // If assistant tool_call ids are known, keep only matching tool results.
+          if (requiredIds && requiredIds.size > 0 && !requiredIds.has(id)) {
+            continue;
+          }
+          // Dedupe repeated tool results for the same id.
+          if (seenToolIds.has(id)) continue;
           toolMessages.push(m);
-          seenToolIds.add(m.tool_call_id);
+          seenToolIds.add(id);
         }
         // Drop tool messages without ids; they can't be safely associated.
         continue;
       }
 
       // Any non-tool message ends the tool block.
-      flushPending();
+      flushPending(m.role);
     }
 
     if (m.role === 'tool') {
