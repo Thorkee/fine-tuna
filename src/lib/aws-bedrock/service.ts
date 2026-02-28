@@ -625,7 +625,7 @@ export class BedrockLlmService {
 
   // Keep model recommendation behavior stable while Bedrock runtime is rolled out.
   async recommendModel(
-    requirements: { budget: { min: number; max: number }; timeline: string; accuracyPriority: string; preferredFamily?: string },
+    requirements: { budget: { min: number; max: number }; timeline: string; accuracyPriority: string },
     context: ProjectContext
   ): Promise<ModelRecommendation> {
     return gptService.recommendModel(requirements, context);
