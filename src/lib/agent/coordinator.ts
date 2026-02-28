@@ -1,11 +1,14 @@
 import 'server-only';
 
 import { randomUUID } from 'crypto';
+import fs from 'fs/promises';
+import path from 'path';
 import type { Message } from '@/types';
 import type { FunctionDefinition, LlmUsage } from '@/lib/azure-openai/service';
 import { getLlmRuntime } from '@/lib/llm/runtime';
 import { ensureContextWindow, buildSummaryMessage, buildContextUsage, type ContextUsage } from './context-window';
 import { getAgentContextWindowConfig } from './context-config';
+import { estimateTokensForMessages } from './token-counter';
 import { AgentPersistence } from './persistence';
 import { registry } from './registry';
 import { orchestratorSkill } from './skills/orchestrator';
@@ -1311,8 +1314,17 @@ export class AgentCoordinator {
                     function: { name?: string; arguments: string };
                 };
 
-                const buildStreamOptions = (timeoutMs: number) => {
-                    const base = { timeoutMs, maxTokens: contextWindowConfig.maxOutputTokens };
+                const buildStreamOptions = (timeoutMs: number, estimatedInputTokens?: number) => {
+                    let maxTokens = contextWindowConfig.maxOutputTokens;
+                    if (typeof estimatedInputTokens === 'number' && estimatedInputTokens > 0) {
+                        const availableForOutput = contextWindowConfig.maxContextTokens
+                            - estimatedInputTokens
+                            - contextWindowConfig.safetyMarginTokens;
+                        if (availableForOutput > 0 && availableForOutput < maxTokens) {
+                            maxTokens = Math.max(1024, Math.floor(availableForOutput));
+                        }
+                    }
+                    const base = { timeoutMs, maxTokens };
                     return this.state.llm.reasoningEffort
                         ? { ...base, reasoningEffort: this.state.llm.reasoningEffort }
                         : base;
@@ -1324,7 +1336,7 @@ export class AgentCoordinator {
                     lastStreamedAny = false;
                     let usageEmitted = false;
                     const toolCallsByIndex = new Map<number, ToolCallAcc>();
-                    const streamOptions = buildStreamOptions(timeoutMs);
+                    const streamOptions = buildStreamOptions(timeoutMs, estimatedPromptTokens);
 
                     for await (const event of llm.streamChatWithTools(
                         messagesForCall,
@@ -1412,6 +1424,41 @@ export class AgentCoordinator {
                         const retryElapsedMs = Date.now() - startMs;
                         const retryRemainingMs = maxRunMs - retryElapsedMs;
                         if (retryRemainingMs <= 2_500) throw err;
+
+                        if (contextWindowConfig.logContext && this.context.projectId) {
+                            try {
+                                const safeId = this.context.projectId.replace(/[^a-zA-Z0-9_-]/g, '_');
+                                const dumpDir = path.resolve(process.cwd(), 'agent_notes', safeId);
+                                await fs.mkdir(dumpDir, { recursive: true });
+                                const ts = new Date().toISOString().replace(/[:.]/g, '-');
+                                const dumpPath = path.join(dumpDir, `context_debug_${ts}.json`);
+                                const dump = {
+                                    timestamp: new Date().toISOString(),
+                                    iteration,
+                                    skill: currentSkillId,
+                                    estimatedInputTokens: ctxResult.after.estimatedTokens,
+                                    config: {
+                                        maxContextTokens: contextWindowConfig.maxContextTokens,
+                                        maxOutputTokens: contextWindowConfig.maxOutputTokens,
+                                        maxInputTokens: contextWindowConfig.maxInputTokens,
+                                        safetyMarginTokens: contextWindowConfig.safetyMarginTokens,
+                                    },
+                                    error: err instanceof Error ? err.message : String(err),
+                                    messageCount: messages.length,
+                                    messages: messages.map(m => ({
+                                        role: m.role,
+                                        contentLength: typeof m.content === 'string' ? m.content.length : 0,
+                                        toolCalls: Array.isArray(m.tool_calls) ? m.tool_calls.length : 0,
+                                        name: m.name,
+                                        contentPreview: typeof m.content === 'string' ? m.content.slice(0, 500) : '',
+                                    })),
+                                };
+                                await fs.writeFile(dumpPath, JSON.stringify(dump, null, 2), 'utf-8');
+                                console.info(`[ContextWindow] Debug dump written to ${dumpPath}`);
+                            } catch {
+                                // best-effort
+                            }
+                        }
 
                         recordStatus('thinking', 'compacting_context');
                         const retryCtxResult = await ensureContextWindow(this.state, this.context, {
@@ -1653,6 +1700,27 @@ export class AgentCoordinator {
                     };
                 }
 
+                // Before honoring signal_completion, verify the plan is actually finished.
+                // If there are still 'todo' or 'blocked' steps, the model called it
+                // prematurely — override and nudge it to keep working.
+                const unfinishedSteps = this.state.plan.filter(
+                    s => s.status === 'todo' || s.status === 'blocked'
+                );
+                if (this.state.completionSignal && !hadToolError && unfinishedSteps.length > 0) {
+                    this.state.completionSignal = undefined;
+                    const stepSummary = unfinishedSteps.slice(0, 5)
+                        .map(s => `[${s.status}] ${s.id}: ${s.title}`).join('; ');
+                    this.state.memory.shortTerm.push({
+                        role: 'user',
+                        content: `[system: You called signal_completion but ${unfinishedSteps.length} step(s) are still unfinished: ${stepSummary}. ` +
+                            `Continue executing these steps. Only call signal_completion when ALL steps are done/failed/skipped.]`,
+                    });
+                    this.state.phase = 'executing';
+                    recordPhaseStatus(this.state.phase);
+                    await this.saveState();
+                    continue;
+                }
+
                 // Check if the agent explicitly signalled completion via signal_completion tool.
                 // Honor it as the primary completion mechanism — but only if there were no
                 // critical tool errors that need reflection first.
@@ -1746,8 +1814,8 @@ export class AgentCoordinator {
                 const completedSteps = this.state.plan.filter(
                     s => s.status === 'done' || s.status === 'failed' || s.status === 'skipped'
                 );
-                const mostlyDone = completedSteps.length > 0 &&
-                    completedSteps.length >= this.state.plan.length * 0.6;
+                const mostlyDone = completedSteps.length >= 2 &&
+                    completedSteps.length >= this.state.plan.length * 0.8;
                 const looksLikeFinalAnswer = responseText.includes('FINAL:') ||
                     (responseText.length > 200 && mostlyDone);
 
@@ -2043,10 +2111,21 @@ export class AgentCoordinator {
     private async maybeSummarizeMemory(remainingMs?: number, onLlmUsage?: (usage: LlmUsage) => void): Promise<void> {
         const MAX_SHORT_TERM = 40;
         const KEEP_LAST = 20;
-        if (this.state.memory.shortTerm.length <= MAX_SHORT_TERM) return;
         if (typeof remainingMs === 'number' && remainingMs <= 6_000) return;
 
         const config = getAgentContextWindowConfig();
+
+        const maxInputCap = typeof config.maxInputTokens === 'number' && config.maxInputTokens > 0
+            ? config.maxInputTokens
+            : Infinity;
+        const inputBudget = Math.max(1,
+            Math.min(maxInputCap, config.maxContextTokens - config.maxOutputTokens) - config.safetyMarginTokens
+        );
+        const tokenTrigger = Math.floor(inputBudget * config.summaryTriggerFraction);
+        const estimatedTokens = estimateTokensForMessages(this.state.memory.shortTerm);
+        const overTokenBudget = estimatedTokens > tokenTrigger;
+
+        if (this.state.memory.shortTerm.length <= MAX_SHORT_TERM && !overTokenBudget) return;
 
         const clip = (text: string, max: number) => {
             if (text.length <= max) return text;

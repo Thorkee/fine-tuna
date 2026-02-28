@@ -2,7 +2,8 @@ import type { Message } from '@/types';
 
 export type TokenEstimateOptions = {
   /**
-   * Approximate characters per token. 4 is a common rough estimate for English.
+   * Approximate characters per token. 3 is conservative and better suited for
+   * JSON/code-heavy agent conversations (tool schemas, tool call arguments, etc.).
    * Keep this configurable so we can calibrate per deployment/workload.
    */
   charsPerToken?: number;
@@ -21,7 +22,7 @@ function safeStringify(value: unknown): string {
 }
 
 export function estimateTokensFromText(text: string, opts?: TokenEstimateOptions): number {
-  const charsPerToken = opts?.charsPerToken && opts.charsPerToken > 0 ? opts.charsPerToken : 4;
+  const charsPerToken = opts?.charsPerToken && opts.charsPerToken > 0 ? opts.charsPerToken : 3;
   const normalized = typeof text === 'string' ? text : '';
   if (!normalized) return 0;
   return Math.max(1, Math.ceil(normalized.length / charsPerToken));
@@ -31,7 +32,7 @@ export function estimateTokensForMessage(message: Message, opts?: TokenEstimateO
   const perMessageOverhead =
     typeof opts?.perMessageOverheadTokens === 'number' && Number.isFinite(opts.perMessageOverheadTokens)
       ? Math.max(0, Math.floor(opts.perMessageOverheadTokens))
-      : 8;
+      : 16;
 
   const content = typeof message.content === 'string' ? message.content : '';
   const toolCalls = Array.isArray(message.tool_calls) ? message.tool_calls : undefined;

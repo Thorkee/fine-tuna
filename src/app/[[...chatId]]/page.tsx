@@ -478,6 +478,8 @@ function normalizeHeadingParagraphs(text: string): string {
   const isHeaderLine = (trimmed: string) =>
     /^#{1,6}\s+/.test(trimmed) ||
     /^(?:\*\*|__)[^*_]+(?:\*\*|__)$/.test(trimmed);
+  const isListItem = (trimmed: string) =>
+    /^\d+\.\s/.test(trimmed) || /^[-*+]\s/.test(trimmed);
 
   // First pass: ensure inline heading-style **...** / __...__ start on their own line.
   // This fixes cases like: "... persisted states!**Analyzing ...**" where the heading gets
@@ -500,7 +502,8 @@ function normalizeHeadingParagraphs(text: string): string {
     expandedLines.push(line);
   }
 
-  // Second pass: add blank lines around header paragraphs for better markdown rendering.
+  // Second pass: add blank lines around headers and before list items so
+  // markdown parsers treat them as block-level elements.
   const out: string[] = [];
   inFence = false;
   for (let i = 0; i < expandedLines.length; i += 1) {
@@ -514,8 +517,13 @@ function normalizeHeadingParagraphs(text: string): string {
 
     if (!inFence) {
       const isHeader = isHeaderLine(trimmed);
+      const isList = isListItem(trimmed);
       const prevIsBlank = out.length === 0 ? true : out[out.length - 1].trim() === "";
+      const prevIsList = out.length > 0 && isListItem(out[out.length - 1].trim());
       if (isHeader && !prevIsBlank) {
+        out.push("");
+      }
+      if (isList && !prevIsBlank && !prevIsList) {
         out.push("");
       }
       out.push(line);
@@ -1332,8 +1340,8 @@ export function ChatShell() {
 
   useEffect(() => {
     const poll = createSmartPoll(loadCredits, {
-      baseInterval: 15_000,
-      maxInterval: 60_000,
+      baseInterval: 30_000,
+      maxInterval: 120_000,
       pauseWhenHidden: true,
       immediate: true,
     });
@@ -2532,9 +2540,7 @@ export function ChatShell() {
           const usedFraction =
             typeof usedFractionRaw === "number" && Number.isFinite(usedFractionRaw)
               ? Math.max(0, Math.min(1, usedFractionRaw))
-              : inputTokens !== null && maxInputTokens
-                ? Math.max(0, Math.min(1, inputTokens / maxInputTokens))
-                : undefined;
+              : undefined;
 
           if (inputTokens !== null) {
             setContextUsage({ inputTokens, maxInputTokens, usedFraction });
@@ -3079,7 +3085,7 @@ export function ChatShell() {
     };
 
     const poll = createSmartPoll(checkActiveRun, {
-      baseInterval: 2500,
+      baseInterval: 5000,
       maxInterval: 15_000,
       pauseWhenHidden: true,
       immediate: true,
@@ -4732,9 +4738,7 @@ export function ChatShell() {
           const usedFraction =
             typeof usedFractionRaw === "number" && Number.isFinite(usedFractionRaw)
               ? Math.max(0, Math.min(1, usedFractionRaw))
-              : inputTokens !== null && maxInputTokens
-                ? Math.max(0, Math.min(1, inputTokens / maxInputTokens))
-                : undefined;
+              : undefined;
 
           if (inputTokens !== null) {
             setContextUsage({ inputTokens, maxInputTokens, usedFraction });

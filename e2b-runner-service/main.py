@@ -216,6 +216,9 @@ def _run_task(
                 extra_inputs=extra_inputs,
                 sagemaker_config=sagemaker,
                 wandb_config=wandb,
+                hf_models=hf_models,
+                hf_datasets=hf_datasets,
+                hf_token=hf_token,
                 timeout_seconds=timeout_hint,
                 on_status_update=_on_sagemaker_status,
             )

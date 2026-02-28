@@ -261,9 +261,21 @@ function buildConversation(
     }
 
     if (pendingToolResults.length > 0) {
-      // Bedrock requires tool results to be followed by assistant continuation.
-      // If user intervenes before that, drop the incomplete exchange.
-      flushPendingToolResults(message.role === 'assistant' ? 'emit' : 'drop');
+      if (message.role === 'assistant') {
+        // Tool results go into a user turn before the assistant continuation.
+        flushPendingToolResults('emit');
+      } else {
+        // A user/system message arrived before the assistant responded to tool
+        // results. Some models (e.g. Mistral via Bedrock) reject 'user' right
+        // after 'tool' in their native format. Insert tool results as a user
+        // turn, then a minimal assistant bridge so the conversation alternation
+        // stays valid after Bedrock translates to the model's native protocol.
+        flushPendingToolResults('emit');
+        conversation.push({
+          role: 'assistant',
+          content: [{ text: '(Acknowledged tool results.)' }],
+        });
+      }
     }
 
     conversation.push({
@@ -298,20 +310,53 @@ function buildConversation(
     for (const current of raw) {
       const prev = out[out.length - 1];
       if (prev && hasToolResult(prev) && current.role !== 'assistant') {
-        // Drop dangling tool_result turn and its paired assistant tool_use tail.
-        out.pop();
-        stripAssistantToolUseTail();
+        // Insert assistant bridge so models that split toolResult out of user
+        // turns (e.g. Mistral) don't see user directly after tool.
+        if (current.role === 'user') {
+          out.push({
+            role: 'assistant',
+            content: [{ text: '(Acknowledged tool results.)' }],
+          });
+        } else {
+          // Non-user, non-assistant after tool_result — drop the dangling pair.
+          out.pop();
+          stripAssistantToolUseTail();
+        }
       }
-      out.push(current);
+      // Merge consecutive same-role messages to satisfy Bedrock's alternating role requirement.
+      const tail = out[out.length - 1];
+      if (tail && tail.role === current.role && Array.isArray(tail.content) && Array.isArray(current.content)) {
+        out[out.length - 1] = { ...tail, content: [...tail.content, ...current.content] };
+      } else {
+        out.push(current);
+      }
     }
     return out;
   };
+
+  const ordered = enforceBedrockToolOrder(conversation);
+
+  // Bedrock requires the first conversation message to be 'user'.
+  // When stripping leading assistant messages, any toolUse blocks they contained
+  // will leave orphaned toolResult references in the following user message.
+  // Strip those orphaned toolResult blocks as well.
+  while (ordered.length > 0 && ordered[0].role !== 'user') {
+    ordered.shift();
+  }
+  if (ordered.length > 0 && ordered[0].role === 'user' && Array.isArray(ordered[0].content)) {
+    const cleaned = ordered[0].content.filter(block => !('toolResult' in block));
+    if (cleaned.length === 0) {
+      ordered.shift();
+    } else if (cleaned.length !== ordered[0].content.length) {
+      ordered[0] = { ...ordered[0], content: cleaned };
+    }
+  }
 
   const system = systemLines.length > 0
     ? [{ text: systemLines.join('\n\n') }]
     : undefined;
 
-  return { system, conversation: enforceBedrockToolOrder(conversation) };
+  return { system, conversation: ordered };
 }
 
 function extractTextFromResponseContent(content: ContentBlock[] | undefined): string {

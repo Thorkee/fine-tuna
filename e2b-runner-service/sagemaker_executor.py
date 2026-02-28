@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import re
 import time
@@ -75,6 +76,47 @@ def _ensure_boto3() -> None:
         raise SageMakerExecutionError("boto3 is required for SageMaker execution. Install boto3 in runner service.")
 
 
+def _fetch_cloudwatch_logs(job_name: str, region: str, max_bytes: int = 50_000) -> str:
+    """Fetch container logs from CloudWatch for a SageMaker training job."""
+    try:
+        logs_client = boto3.client("logs", region_name=region)
+        log_group = "/aws/sagemaker/TrainingJobs"
+        streams_resp = logs_client.describe_log_streams(
+            logGroupName=log_group,
+            logStreamNamePrefix=job_name,
+            orderBy="LastEventTime",
+            descending=True,
+            limit=5,
+        )
+        streams = streams_resp.get("logStreams", [])
+        if not streams:
+            return ""
+        events_resp = logs_client.get_log_events(
+            logGroupName=log_group,
+            logStreamName=streams[0]["logStreamName"],
+            startFromHead=False,
+            limit=200,
+        )
+        events = events_resp.get("events", [])
+        lines = [e.get("message", "") for e in events]
+        text = "\n".join(lines)
+        return text[-max_bytes:] if len(text) > max_bytes else text
+    except Exception as exc:
+        return f"(Could not fetch CloudWatch logs: {exc})"
+
+
+def _format_status_transitions(transitions: list) -> List[str]:
+    """Format SecondaryStatusTransitions into human-readable lines."""
+    lines: List[str] = []
+    for t in (transitions or []):
+        start = t.get("StartTime", "")
+        end = t.get("EndTime", "")
+        status = t.get("Status", "")
+        msg = t.get("StatusMessage", "")
+        lines.append(f"  {start} -> {end}  [{status}] {msg}")
+    return lines
+
+
 def run_training_in_sagemaker(
     *,
     task_id: uuid.UUID,
@@ -86,6 +128,9 @@ def run_training_in_sagemaker(
     extra_inputs: Optional[List[Tuple[str, str]]] = None,
     sagemaker_config: Optional[Dict[str, Any]] = None,
     wandb_config: Optional[Dict[str, Any]] = None,
+    hf_models: Optional[List[Dict[str, Any]]] = None,
+    hf_datasets: Optional[List[Dict[str, Any]]] = None,
+    hf_token: Optional[str] = None,
     timeout_seconds: Optional[int] = None,
     on_status_update: Optional[Callable[[str, Optional[str]], None]] = None,
 ) -> SageMakerRunResult:
@@ -103,6 +148,20 @@ def run_training_in_sagemaker(
         raise SageMakerExecutionError("SageMaker training image URI is required.")
     if not output_s3_uri:
         raise SageMakerExecutionError("SageMaker output S3 URI is required.")
+
+    for label, fpath in [("input", input_path), ("script", script_path)]:
+        p = Path(fpath)
+        if not p.is_file():
+            raise SageMakerExecutionError(f"Missing {label} file: {fpath}")
+        if p.stat().st_size == 0:
+            raise SageMakerExecutionError(f"Empty {label} file: {fpath}")
+    for pair in (extra_inputs or []):
+        extra_name, extra_path = pair
+        p = Path(extra_path)
+        if not p.is_file():
+            raise SageMakerExecutionError(f"Missing extra input file '{extra_name}': {extra_path}")
+        if p.stat().st_size == 0:
+            raise SageMakerExecutionError(f"Empty extra input file '{extra_name}': {extra_path}")
 
     sm_client = boto3.client("sagemaker", region_name=region)
     s3_client = boto3.client("s3", region_name=region)
@@ -167,6 +226,11 @@ def run_training_in_sagemaker(
     if wandb.get("run_name"):
         hyperparameters.setdefault("wandb_run_name", str(wandb.get("run_name")))
 
+    if hf_models:
+        hyperparameters["tuna_hf_models"] = json.dumps(hf_models)
+    if hf_datasets:
+        hyperparameters["tuna_hf_datasets"] = json.dumps(hf_datasets)
+
     environment: Dict[str, str] = {}
     wandb_api_key = (os.getenv("WANDB_API_KEY") or "").strip()
     if wandb_api_key:
@@ -175,6 +239,9 @@ def run_training_in_sagemaker(
         environment.setdefault("WANDB_PROJECT", str(wandb.get("project")))
     if wandb.get("entity"):
         environment.setdefault("WANDB_ENTITY", str(wandb.get("entity")))
+    hf_token_value = (hf_token or "").strip()
+    if hf_token_value:
+        environment["HUGGINGFACE_HUB_TOKEN"] = hf_token_value
 
     request: Dict[str, Any] = {
         "TrainingJobName": training_job_name,
@@ -264,8 +331,26 @@ def run_training_in_sagemaker(
             status_lines.append(f"{_now_iso()} no model artifact URI returned by SageMaker.")
     else:
         failure_reason = str(terminal_desc.get("FailureReason") or "").strip()
-        stderr = failure_reason or f"SageMaker job finished with status={final_status}"
-        status_lines.append(f"{_now_iso()} terminal_status={final_status} reason={stderr}")
+
+        transitions = terminal_desc.get("SecondaryStatusTransitions") or []
+        transition_lines = _format_status_transitions(transitions)
+        if transition_lines:
+            status_lines.append(f"{_now_iso()} SecondaryStatusTransitions:")
+            status_lines.extend(transition_lines)
+
+        cw_logs = _fetch_cloudwatch_logs(training_job_name, region)
+        if cw_logs.strip():
+            status_lines.append(f"{_now_iso()} CloudWatch container logs (tail):")
+            status_lines.append(cw_logs)
+
+        error_parts = [failure_reason or f"SageMaker job finished with status={final_status}"]
+        if transition_lines:
+            error_parts.append("Status transitions:\n" + "\n".join(transition_lines))
+        if cw_logs.strip():
+            error_parts.append("Container logs (tail):\n" + cw_logs[:4000])
+        stderr = "\n\n".join(error_parts)
+
+        status_lines.append(f"{_now_iso()} terminal_status={final_status} reason={failure_reason}")
         raise SageMakerExecutionError(stderr)
 
     status_lines.append(f"{_now_iso()} terminal_status={final_status}")
@@ -284,6 +369,7 @@ def run_training_in_sagemaker(
             "TrainingEndTime": str(terminal_desc.get("TrainingEndTime") or ""),
             "BillableTimeInSeconds": terminal_desc.get("BillableTimeInSeconds"),
             "FinalMetricDataList": terminal_desc.get("FinalMetricDataList") or [],
+            "SecondaryStatusTransitions": terminal_desc.get("SecondaryStatusTransitions") or [],
         },
     }
     return SageMakerRunResult(

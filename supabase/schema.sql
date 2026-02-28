@@ -1272,15 +1272,25 @@ $$;
 
 grant execute on function public.grant_credits(uuid, bigint, text, jsonb, text, text) to service_role;
 
--- Realtime subscription (idempotent: add only if not already in publication)
-do $$ begin
-  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'messages') then
-    alter publication supabase_realtime add table messages;
-  end if;
-  if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'agent_runs') then
-    alter publication supabase_realtime add table agent_runs;
-  end if;
-end $$;
+-- ==========================================
+-- PERFORMANCE INDEXES
+-- ==========================================
+CREATE INDEX IF NOT EXISTS idx_chats_user_id_created ON chats (user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_messages_chat_id_created ON messages (chat_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_chat_status ON agent_runs (chat_id, status);
+CREATE INDEX IF NOT EXISTS idx_user_mcp_servers_user ON user_mcp_servers (user_id);
+
+-- Realtime subscription disabled: no client code subscribes to these tables,
+-- and the publication creates unnecessary WAL overhead on every write.
+-- To re-enable, uncomment the block below.
+-- do $$ begin
+--   if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'messages') then
+--     alter publication supabase_realtime add table messages;
+--   end if;
+--   if not exists (select 1 from pg_publication_tables where pubname = 'supabase_realtime' and tablename = 'agent_runs') then
+--     alter publication supabase_realtime add table agent_runs;
+--   end if;
+-- end $$;
 
 -- ==========================================
 -- NEW PROJECT / AGENT SCHEMA

@@ -104,7 +104,7 @@ function DesktopPreviewPlaceholder({
   );
 }
 
-function getArtifactsStorageTarget(raw: string): { bucket: "artifacts"; storagePath: string } | null {
+function getArtifactsStorageTarget(raw: string): { bucket: "artifacts" | "runner-artifacts"; storagePath: string } | null {
   const trimmed = raw.trim();
   if (!trimmed) return null;
   if (trimmed.startsWith("artifacts/")) {
@@ -113,8 +113,11 @@ function getArtifactsStorageTarget(raw: string): { bucket: "artifacts"; storageP
   if (trimmed.startsWith("runner-outputs/") || trimmed.startsWith("exports/")) {
     return { bucket: "artifacts", storagePath: trimmed };
   }
+  if (trimmed.startsWith("desktop/")) {
+    return { bucket: "runner-artifacts", storagePath: trimmed };
+  }
   const parsed = parseSupabaseStorageUrl(trimmed);
-  if (parsed && parsed.bucket === "artifacts") {
+  if (parsed && (parsed.bucket === "artifacts" || parsed.bucket === "runner-artifacts")) {
     return { bucket: parsed.bucket, storagePath: parsed.storagePath };
   }
   return null;
@@ -134,6 +137,12 @@ export default function DesktopArtifact(props: { dataOverride?: unknown; shareId
   const [liveState, setLiveState] = useState<DesktopStateV1 | null>(null);
   const [streamRefreshKey, setStreamRefreshKey] = useState(0);
   const [streamActive, setStreamActive] = useState<boolean | null>(null);
+  const [resolvedStreamUrl, setResolvedStreamUrlState] = useState<string | null>(null);
+  const resolvedStreamUrlRef = useRef<string | null>(null);
+  const setResolvedStreamUrl = (url: string | null) => {
+    resolvedStreamUrlRef.current = url;
+    setResolvedStreamUrlState(url);
+  };
   const desktopPollRef = useRef<number | null>(null);
   const eventsAfterRef = useRef<number>(0);
   const recordingAfterRef = useRef<number>(0);
@@ -304,6 +313,7 @@ export default function DesktopArtifact(props: { dataOverride?: unknown; shareId
     streamActiveRef.current = null;
     streamInactiveCountRef.current = 0;
     setStreamActive(null);
+    setResolvedStreamUrl(null);
     setResolvedPreviewUrl(null);
   }, [isReadOnly, sessionKey]);
 
@@ -405,9 +415,25 @@ export default function DesktopArtifact(props: { dataOverride?: unknown; shareId
           if (shouldClearStream) {
             update.streamUrl = undefined;
             update.streamUpdatedAt = new Date().toISOString();
-          } else if (streamActiveValue === true && !streamUrl && sessionId && chatId) {
-            update.streamUrl = `/api/runner/desktop/sessions/${sessionId}/stream?chatId=${chatId}`;
-            update.streamUpdatedAt = new Date().toISOString();
+            setResolvedStreamUrl(null);
+          } else if (streamActiveValue === true && sessionId && chatId) {
+            if (!streamUrl) {
+              update.streamUrl = `/api/runner/desktop/sessions/${sessionId}/stream?chatId=${chatId}`;
+              update.streamUpdatedAt = new Date().toISOString();
+            }
+            if (!resolvedStreamUrlRef.current) {
+              try {
+                const streamResp = await fetch(
+                  `/api/runner/desktop/sessions/${sessionId}/stream?chatId=${chatId}&format=json`
+                );
+                if (streamResp.ok) {
+                  const streamData = await streamResp.json().catch(() => null) as { url?: string } | null;
+                  if (streamData?.url) setResolvedStreamUrl(streamData.url);
+                }
+              } catch {
+                // stream URL resolution failed; keep existing
+              }
+            }
           }
           setLiveState((prev) => mergeDesktopState(prev ?? emptyDesktopState(), update));
         } else if (statusResp.status === 404) {
@@ -460,14 +486,16 @@ export default function DesktopArtifact(props: { dataOverride?: unknown; shareId
   }, [chatId, isReadOnly, sessionId]);
 
   const streamSrc = useMemo(() => {
-    if (!streamUrl || status !== "running") return null;
+    if (status !== "running") return null;
+    if (resolvedStreamUrl) return resolvedStreamUrl;
+    if (!streamUrl) return null;
     const stamp = state.streamUpdatedAt ?? "";
     const suffixes = [];
     if (stamp) suffixes.push(`ts=${encodeURIComponent(stamp)}`);
     if (streamRefreshKey) suffixes.push(`refresh=${streamRefreshKey}`);
     if (suffixes.length === 0) return streamUrl;
     return `${streamUrl}${streamUrl.includes("?") ? "&" : "?"}${suffixes.join("&")}`;
-  }, [state.streamUpdatedAt, status, streamRefreshKey, streamUrl]);
+  }, [resolvedStreamUrl, state.streamUpdatedAt, status, streamRefreshKey, streamUrl]);
   const showStream = Boolean(streamSrc) && streamActive !== false;
   const currentFrame = hasRecording
     ? recordingFrames[Math.min(playbackIndex, recordingFrames.length - 1)]
@@ -686,7 +714,7 @@ export default function DesktopArtifact(props: { dataOverride?: unknown; shareId
             <div className="flex items-center gap-2">
               <button
                 type="button"
-                onClick={() => setStreamRefreshKey(Date.now())}
+                onClick={() => { setResolvedStreamUrl(null); setStreamRefreshKey(Date.now()); }}
                 disabled={!sessionId || !chatId || !streamSrc}
                 className="inline-flex items-center gap-1 rounded-full border border-black/10 dark:border-white/10 px-3 py-1 text-xs text-zinc-600 hover:text-zinc-900 dark:text-zinc-300 dark:hover:text-white disabled:opacity-40"
               >

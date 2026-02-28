@@ -12,6 +12,7 @@ RUN pip install --no-cache-dir \
     peft>=0.13 \
     bitsandbytes>=0.44 \
     datasets>=3.0 \
+    huggingface_hub>=0.24 \
     sentencepiece>=0.2 \
     safetensors>=0.4 \
     scikit-learn>=1.5 \

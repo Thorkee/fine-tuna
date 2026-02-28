@@ -254,6 +254,7 @@ export default function Sidebar({
     }, [collapsed]);
 
     const chatPollRef = useRef<SmartPollController | null>(null);
+    const creditsPollRef = useRef<SmartPollController | null>(null);
 
     const loadChats = useCallback(async () => {
         try {
@@ -278,7 +279,7 @@ export default function Sidebar({
     // Smart polling for chat list updates with visibility awareness and backoff
     useEffect(() => {
         const poll = createSmartPoll(loadChats, {
-            baseInterval: 2500,
+            baseInterval: 10_000,
             maxInterval: 30_000,
             pauseWhenHidden: true,
             immediate: true,
@@ -294,12 +295,12 @@ export default function Sidebar({
     // Listen for cross-tab events that affect the chat list
     useConnectionManager({
         onVisibilityRestore: () => {
-            // Immediately refresh chat list when tab becomes visible
             chatPollRef.current?.forceNow();
+            creditsPollRef.current?.forceNow();
         },
         onOnline: () => {
-            // Refresh on reconnect
             chatPollRef.current?.forceNow();
+            creditsPollRef.current?.forceNow();
         },
         onSyncEvent: (event: SyncEvent) => {
             // Immediately refresh when another tab creates/deletes/updates a chat
@@ -426,11 +427,17 @@ export default function Sidebar({
     }, [supabase]);
 
     useEffect(() => {
-        const timeout = window.setTimeout(loadCredits, 0);
-        const interval = window.setInterval(loadCredits, 15000);
+        const poll = createSmartPoll(loadCredits, {
+            baseInterval: 30_000,
+            maxInterval: 120_000,
+            pauseWhenHidden: true,
+            immediate: true,
+        });
+        creditsPollRef.current = poll;
+        poll.start();
         return () => {
-            window.clearTimeout(timeout);
-            window.clearInterval(interval);
+            poll.stop();
+            creditsPollRef.current = null;
         };
     }, [loadCredits]);
 

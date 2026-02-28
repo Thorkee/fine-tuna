@@ -47,6 +47,11 @@ export type AgentContextWindowConfig = {
    * Hard cap on assistant message content size in characters.
    */
   assistantMessageMaxChars: number;
+  /**
+   * Hard cap on the running summary size in characters.
+   * Prevents a runaway summary from consuming too much of the context budget.
+   */
+  summaryMaxChars: number;
 };
 
 function readFirstEnv(...varNames: string[]): string | undefined {
@@ -85,8 +90,9 @@ function parseNumberEnv(...varNames: string[]): number | undefined {
 export function getAgentContextWindowConfig(): AgentContextWindowConfig {
   const maxContextTokens =
     parsePositiveIntEnv('TUNA_AGENT_MAX_CONTEXT_TOKENS') ??
-    // Azure model catalog sometimes differs from OpenAI docs; choose a conservative default.
-    200_000;
+    // Mistral Large 3 on Bedrock: 262K. Use a conservative default that
+    // won't overshoot any common deployment.
+    262_144;
 
   const maxInputTokens =
     parsePositiveIntEnv('TUNA_AGENT_MAX_INPUT_TOKENS') ??
@@ -94,23 +100,23 @@ export function getAgentContextWindowConfig(): AgentContextWindowConfig {
 
   const maxOutputTokens =
     parsePositiveIntEnv('TUNA_AGENT_MAX_OUTPUT_TOKENS') ??
-    4_096;
+    8_192;
 
   const safetyMarginTokens =
     parsePositiveIntEnv('TUNA_AGENT_CONTEXT_SAFETY_MARGIN_TOKENS') ??
-    2_048;
+    8_192;
 
   const summaryMaxOutputTokens =
     parsePositiveIntEnv('TUNA_AGENT_SUMMARY_MAX_OUTPUT_TOKENS') ??
-    900;
+    4_096;
 
   const summaryTriggerFractionRaw =
     parseNumberEnv('TUNA_AGENT_SUMMARY_TRIGGER_FRACTION') ??
-    0.8;
+    0.7;
   const summaryTriggerFraction =
     summaryTriggerFractionRaw > 0 && summaryTriggerFractionRaw <= 1
       ? summaryTriggerFractionRaw
-      : 0.8;
+      : 0.7;
 
   const logContext =
     parseBooleanEnv('TUNA_AGENT_LOG_CONTEXT') ??
@@ -124,6 +130,10 @@ export function getAgentContextWindowConfig(): AgentContextWindowConfig {
     parsePositiveIntEnv('TUNA_AGENT_ASSISTANT_MESSAGE_MAX_CHARS') ??
     32_000;
 
+  const summaryMaxChars =
+    parsePositiveIntEnv('TUNA_AGENT_SUMMARY_MAX_CHARS') ??
+    12_000;
+
   return {
     maxContextTokens,
     maxInputTokens,
@@ -134,6 +144,7 @@ export function getAgentContextWindowConfig(): AgentContextWindowConfig {
     logContext,
     toolMessageMaxChars,
     assistantMessageMaxChars,
+    summaryMaxChars,
   };
 }
 

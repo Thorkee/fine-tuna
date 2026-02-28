@@ -24,6 +24,8 @@ Rules:
 7. If the request requires specialized work, call \`set_active_skill\` to switch to the best skill for execution.
 8. Use the provided tools (read_file, list_files) to inspect the project context before guessing.
 9. Provide short progress updates (1-2 sentences) while working. Keep them minimal, avoid chain-of-thought, and leave the final answer for the end.
+9a. Do NOT emit "status reports", "key outcomes", or step-by-step summaries between plan steps. After completing a step, immediately proceed to the next step by calling the appropriate tools. Save summary output for the very end.
+9b. NEVER call \`signal_completion\` when there are still 'todo' or 'doing' steps in the plan. Always finish or explicitly skip ALL steps first.
 10. Output routing rules:
    - Your **main answer to the user** should be written as plain text (no prefix). This is the default.
    - Only use the \`TRACE:\` prefix for short internal progress notes (e.g., "TRACE: Reading file X…", "TRACE: Running web search…"). These get collapsed in the UI and are NOT shown as the answer.

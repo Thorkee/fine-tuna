@@ -7,7 +7,9 @@ import { Cpu } from "lucide-react";
 import ArtifactLoadingState from "@/app/components/ui/ArtifactLoadingState";
 import GenericArtifactRenderer from "@/app/components/ui/GenericArtifactRenderer";
 import TerminalViewer from "@/app/components/ui/TerminalViewer";
+import TrainingCurveChart from "@/app/components/artifacts/TrainingCurveChart";
 import { useProjectArtifacts } from "@/lib/hooks/useProjectArtifacts";
+import { parseTrainingMetrics } from "@/lib/training/parse-metrics";
 
 export default function TrainingArtifact(props: { dataOverride?: unknown } = {}) {
     const dataOverride = props.dataOverride;
@@ -91,6 +93,10 @@ export default function TrainingArtifact(props: { dataOverride?: unknown } = {})
 
     const isReadOnly = dataOverride !== undefined;
     const [activeStream, setActiveStream] = useState<"all" | "stdout" | "stderr">("all");
+    const [activeView, setActiveView] = useState<"logs" | "curve">("logs");
+
+    const metrics = useMemo(() => parseTrainingMetrics(stdoutText), [stdoutText]);
+    const hasMetrics = metrics.length > 0;
 
     useEffect(() => {
         if (isReadOnly || !taskId || !chatId) return;
@@ -321,54 +327,90 @@ export default function TrainingArtifact(props: { dataOverride?: unknown } = {})
                 {inputName ? <span className="truncate">Input {inputName}</span> : null}
             </div>
 
-            <div className="glass-card p-3">
-                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
-                    <div className="text-xs text-zinc-500">
-                        Logs{hasAnyLog ? "" : " (waiting…)"}
-                    </div>
-                    <div className="flex items-center gap-1 rounded-full border border-zinc-200/70 dark:border-white/10 bg-white/70 dark:bg-white/5 p-0.5">
-                        <button
-                            type="button"
-                            onClick={() => setActiveStream("all")}
-                            className={[
-                                "px-2 py-1 rounded-full text-[10px] transition-colors",
-                                activeStream === "all"
-                                    ? "bg-zinc-900 text-white dark:bg-white/15 dark:text-zinc-100"
-                                    : "text-zinc-600 hover:bg-zinc-100/80 dark:text-zinc-300 dark:hover:bg-white/10",
-                            ].join(" ")}
-                        >
-                            All
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setActiveStream("stdout")}
-                            className={[
-                                "px-2 py-1 rounded-full text-[10px] transition-colors",
-                                activeStream === "stdout"
-                                    ? "bg-zinc-900 text-white dark:bg-white/15 dark:text-zinc-100"
-                                    : "text-zinc-600 hover:bg-zinc-100/80 dark:text-zinc-300 dark:hover:bg-white/10",
-                            ].join(" ")}
-                        >
-                            Stdout
-                        </button>
-                        <button
-                            type="button"
-                            onClick={() => setActiveStream("stderr")}
-                            disabled={!hasStderr && !errorTrimmed}
-                            className={[
-                                "px-2 py-1 rounded-full text-[10px] transition-colors",
-                                (!hasStderr && !errorTrimmed) ? "opacity-40 cursor-not-allowed" : "",
-                                activeStream === "stderr"
-                                    ? "bg-zinc-900 text-white dark:bg-white/15 dark:text-zinc-100"
-                                    : "text-zinc-600 hover:bg-zinc-100/80 dark:text-zinc-300 dark:hover:bg-white/10",
-                            ].join(" ")}
-                        >
-                            Stderr
-                        </button>
-                    </div>
-                </div>
-                <TerminalViewer content={terminalContent} variant={terminalVariant} />
+            <div className="flex items-center gap-1 rounded-full border border-zinc-200/70 dark:border-white/10 bg-white/70 dark:bg-white/5 p-0.5 w-fit">
+                <button
+                    type="button"
+                    onClick={() => setActiveView("logs")}
+                    className={[
+                        "px-3 py-1 rounded-full text-[11px] font-medium transition-colors",
+                        activeView === "logs"
+                            ? "bg-zinc-900 text-white dark:bg-white/15 dark:text-zinc-100"
+                            : "text-zinc-600 hover:bg-zinc-100/80 dark:text-zinc-300 dark:hover:bg-white/10",
+                    ].join(" ")}
+                >
+                    Logs
+                </button>
+                <button
+                    type="button"
+                    onClick={() => setActiveView("curve")}
+                    className={[
+                        "px-3 py-1 rounded-full text-[11px] font-medium transition-colors",
+                        !hasMetrics ? "opacity-40 cursor-not-allowed" : "",
+                        activeView === "curve"
+                            ? "bg-zinc-900 text-white dark:bg-white/15 dark:text-zinc-100"
+                            : "text-zinc-600 hover:bg-zinc-100/80 dark:text-zinc-300 dark:hover:bg-white/10",
+                    ].join(" ")}
+                    disabled={!hasMetrics}
+                >
+                    Curve
+                    {hasMetrics ? (
+                        <span className="ml-1.5 inline-block w-1.5 h-1.5 rounded-full bg-emerald-500 dark:bg-emerald-400" />
+                    ) : null}
+                </button>
             </div>
+
+            {activeView === "curve" ? (
+                <TrainingCurveChart metrics={metrics} />
+            ) : (
+                <div className="glass-card p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                        <div className="text-xs text-zinc-500">
+                            Logs{hasAnyLog ? "" : " (waiting…)"}
+                        </div>
+                        <div className="flex items-center gap-1 rounded-full border border-zinc-200/70 dark:border-white/10 bg-white/70 dark:bg-white/5 p-0.5">
+                            <button
+                                type="button"
+                                onClick={() => setActiveStream("all")}
+                                className={[
+                                    "px-2 py-1 rounded-full text-[10px] transition-colors",
+                                    activeStream === "all"
+                                        ? "bg-zinc-900 text-white dark:bg-white/15 dark:text-zinc-100"
+                                        : "text-zinc-600 hover:bg-zinc-100/80 dark:text-zinc-300 dark:hover:bg-white/10",
+                                ].join(" ")}
+                            >
+                                All
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setActiveStream("stdout")}
+                                className={[
+                                    "px-2 py-1 rounded-full text-[10px] transition-colors",
+                                    activeStream === "stdout"
+                                        ? "bg-zinc-900 text-white dark:bg-white/15 dark:text-zinc-100"
+                                        : "text-zinc-600 hover:bg-zinc-100/80 dark:text-zinc-300 dark:hover:bg-white/10",
+                                ].join(" ")}
+                            >
+                                Stdout
+                            </button>
+                            <button
+                                type="button"
+                                onClick={() => setActiveStream("stderr")}
+                                disabled={!hasStderr && !errorTrimmed}
+                                className={[
+                                    "px-2 py-1 rounded-full text-[10px] transition-colors",
+                                    (!hasStderr && !errorTrimmed) ? "opacity-40 cursor-not-allowed" : "",
+                                    activeStream === "stderr"
+                                        ? "bg-zinc-900 text-white dark:bg-white/15 dark:text-zinc-100"
+                                        : "text-zinc-600 hover:bg-zinc-100/80 dark:text-zinc-300 dark:hover:bg-white/10",
+                                ].join(" ")}
+                            >
+                                Stderr
+                            </button>
+                        </div>
+                    </div>
+                    <TerminalViewer content={terminalContent} variant={terminalVariant} />
+                </div>
+            )}
 
             <div className="flex flex-wrap gap-3 text-xs">
                 {downloadUrl ? (

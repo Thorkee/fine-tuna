@@ -1,6 +1,6 @@
 "use client";
 
-export type StorageBucket = "uploads" | "artifacts";
+export type StorageBucket = "uploads" | "artifacts" | "runner-artifacts";
 
 export function parseSupabaseStorageUrl(rawUrl: string): { bucket: StorageBucket; storagePath: string } | null {
   if (typeof rawUrl !== "string" || !rawUrl.trim()) return null;
@@ -11,12 +11,14 @@ export function parseSupabaseStorageUrl(rawUrl: string): { bucket: StorageBucket
     return null;
   }
 
+  const validBuckets = new Set<StorageBucket>(["uploads", "artifacts", "runner-artifacts"]);
+
   // S3-compat: {endpoint}/storage/v1/s3/{bucket}/{key}
   const s3Match = url.pathname.match(/\/storage\/v1\/s3\/([^/]+)\/(.+)/);
   if (s3Match) {
-    const bucket = s3Match[1];
+    const bucket = s3Match[1] as StorageBucket;
     const storagePath = s3Match[2];
-    if ((bucket === "uploads" || bucket === "artifacts") && typeof storagePath === "string" && storagePath.trim()) {
+    if (validBuckets.has(bucket) && typeof storagePath === "string" && storagePath.trim()) {
       return { bucket, storagePath };
     }
   }
@@ -24,9 +26,9 @@ export function parseSupabaseStorageUrl(rawUrl: string): { bucket: StorageBucket
   // Object API: /storage/v1/object/public/{bucket}/{key} or /storage/v1/object/sign/{bucket}/{key}
   const objectMatch = url.pathname.match(/\/storage\/v1\/object\/(?:public|sign)\/([^/]+)\/(.+)/);
   if (objectMatch) {
-    const bucket = objectMatch[1];
+    const bucket = objectMatch[1] as StorageBucket;
     const storagePath = objectMatch[2];
-    if ((bucket === "uploads" || bucket === "artifacts") && typeof storagePath === "string" && storagePath.trim()) {
+    if (validBuckets.has(bucket) && typeof storagePath === "string" && storagePath.trim()) {
       return { bucket, storagePath };
     }
   }

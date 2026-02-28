@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 
 type SignedUrlPayload = {
   chatId: string;
-  bucket: "uploads" | "artifacts";
+  bucket: "uploads" | "artifacts" | "runner-artifacts";
   storagePath: string;
   ttlSeconds?: number;
 };
@@ -18,6 +18,10 @@ function isAllowedArtifactsPath(chatId: string, storagePath: string): boolean {
     storagePath.startsWith(`exports/${chatId}/`) ||
     storagePath.startsWith(`runner-outputs/${chatId}/`)
   );
+}
+
+function isAllowedRunnerArtifactsPath(storagePath: string): boolean {
+  return storagePath.startsWith("desktop/");
 }
 
 function parseTtl(value: unknown): number | null {
@@ -36,7 +40,7 @@ export async function POST(req: NextRequest) {
   const storagePath = payload?.storagePath?.trim();
   const ttlSeconds = parseTtl(payload?.ttlSeconds) ?? 60 * 10;
 
-  if (!chatId || (bucket !== "uploads" && bucket !== "artifacts") || !storagePath) {
+  if (!chatId || (bucket !== "uploads" && bucket !== "artifacts" && bucket !== "runner-artifacts") || !storagePath) {
     return Response.json({ error: "Missing payload" }, { status: 400 });
   }
 
@@ -59,6 +63,10 @@ export async function POST(req: NextRequest) {
   if (bucket === "uploads") {
     const expectedPrefix = `${user.id}/${chatId}/`;
     if (!storagePath.startsWith(expectedPrefix)) {
+      return Response.json({ error: "Forbidden" }, { status: 403 });
+    }
+  } else if (bucket === "runner-artifacts") {
+    if (!isAllowedRunnerArtifactsPath(storagePath)) {
       return Response.json({ error: "Forbidden" }, { status: 403 });
     }
   } else if (!isAllowedArtifactsPath(chatId, storagePath)) {

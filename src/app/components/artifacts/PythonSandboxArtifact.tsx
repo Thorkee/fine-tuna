@@ -29,8 +29,41 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
-
-
+/**
+ * Runner events arrive in snake_case; map them to camelCase SandboxEvent fields.
+ */
+function normalizeRunnerEvent(raw: Record<string, unknown>): SandboxEvent {
+  return {
+    id: (raw.id as string) ?? "",
+    seq: typeof raw.seq === "number" ? raw.seq : undefined,
+    kind: (raw.kind as string) ?? "",
+    label:
+      (raw.label as string) ??
+      (raw.command as string) ??
+      "",
+    status:
+      (raw.status as SandboxEvent["status"]) ?? "completed",
+    startedAt:
+      (raw.startedAt as string) ??
+      (raw.started_at as string) ??
+      "",
+    finishedAt:
+      (raw.finishedAt as string) ??
+      (raw.finished_at as string) ??
+      undefined,
+    durationMs:
+      typeof raw.durationMs === "number"
+        ? raw.durationMs
+        : typeof raw.duration_ms === "number"
+          ? raw.duration_ms
+          : undefined,
+    stdout:
+      typeof raw.stdout === "string" ? raw.stdout : undefined,
+    stderr:
+      typeof raw.stderr === "string" ? raw.stderr : undefined,
+    meta: (raw.meta as Record<string, unknown>) ?? undefined,
+  };
+}
 
 function formatTime(value?: string) {
   if (!value) return "";
@@ -52,12 +85,18 @@ function buildTerminalLog(events: SandboxEvent[]): string {
     const kind = evt.kind;
     if (kind !== "command" && kind !== "exec" && kind !== "pty") continue;
     const id = evt.id || `${kind}-${evt.startedAt}`;
+    const evtLabel = evt.label
+      || (typeof (evt as Record<string, unknown>).command === "string"
+        ? (evt as Record<string, unknown>).command as string
+        : "")
+      || kind;
     if (!entries.has(id)) {
-      entries.set(id, { kind, label: evt.label, status: evt.status, durationMs: evt.durationMs });
+      entries.set(id, { kind, label: evtLabel, status: evt.status, durationMs: evt.durationMs });
       order.push(id);
     }
     const entry = entries.get(id);
     if (!entry) continue;
+    if (evtLabel && evtLabel !== kind) entry.label = evtLabel;
     if (typeof evt.stdout === "string") entry.stdout = evt.stdout;
     if (typeof evt.stderr === "string") entry.stderr = evt.stderr;
     entry.status = evt.status;
@@ -195,8 +234,10 @@ export function SandboxStateProvider(props: {
           `/api/runner/sessions/${sessionId}/events?chatId=${chatId}&after=${afterRef.current}&limit=200`
         );
         if (eventsResp.ok) {
-          const data = (await eventsResp.json()) as { events?: SandboxEvent[]; next_after?: number };
-          const events = Array.isArray(data.events) ? data.events : [];
+          const data = (await eventsResp.json()) as { events?: Record<string, unknown>[]; next_after?: number };
+          const events = Array.isArray(data.events)
+            ? data.events.map(normalizeRunnerEvent)
+            : [];
           if (events.length > 0) {
             afterRef.current = typeof data.next_after === "number" ? data.next_after : afterRef.current;
             setLiveState((prev) =>

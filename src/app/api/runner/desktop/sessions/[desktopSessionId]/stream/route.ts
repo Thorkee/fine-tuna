@@ -62,6 +62,10 @@ export async function GET(
     if (!data?.url) {
       return Response.json({ error: "Runner did not return a stream URL" }, { status: 500 });
     }
+    const wantJson = searchParams.get("format") === "json";
+    if (wantJson) {
+      return Response.json({ url: data.url });
+    }
     return Response.redirect(data.url, 302);
   } catch (error) {
     const message = error instanceof Error ? error.message : "Runner desktop stream url failed";

@@ -1,13 +1,20 @@
 #!/usr/bin/env python3
 """
-Minimal SageMaker training entrypoint for Tuna runner contract.
+SageMaker training entrypoint for Tuna runner contract.
 
 Expected input channels:
 - /opt/ml/input/data/training : primary dataset file
 - /opt/ml/input/data/script   : user training script (.py)
 - /opt/ml/input/data/<extra>  : optional extra files/channels
 
+HF prefetch: reads ``tuna_hf_models`` / ``tuna_hf_datasets`` from
+hyperparameters (JSON arrays) and downloads them via
+``huggingface_hub.snapshot_download`` before running the user script.
+Environment variables ``HF_MODEL_DIR``, ``HF_DATASET_DIR``, etc. are set
+so training scripts can locate the prefetched assets.
+
 Behavior:
+- Prefetches HF models/datasets if configured
 - Copies channel files into /opt/ml/code
 - Runs the script with a few argument variants:
   1) --input <file> --out /opt/ml/model/<expected>
@@ -20,12 +27,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 OPT_ML = Path("/opt/ml")
 INPUT_ROOT = OPT_ML / "input" / "data"
@@ -141,6 +149,113 @@ def copy_fallback_artifact(expected_path: Path) -> bool:
     return False
 
 
+def _safe_slug(value: str) -> str:
+    return re.sub(r"[^A-Za-z0-9._-]", "-", value).strip("-_")[:128] or "item"
+
+
+def _parse_json_hp(raw: str) -> Any:
+    """Decode a hyperparameter that may be double-JSON-encoded by SageMaker."""
+    if not raw:
+        return None
+    try:
+        first = json.loads(raw)
+    except Exception:
+        return None
+    if isinstance(first, str):
+        try:
+            return json.loads(first)
+        except Exception:
+            return first
+    return first
+
+
+def prefetch_hf_assets(hp: Dict[str, str]) -> Dict[str, str]:
+    """Download HF models/datasets specified in hyperparameters.
+
+    Returns a dict of environment variables to inject into the training
+    script's runtime environment.
+    """
+    raw_models = _parse_json_hp(hp.get("tuna_hf_models", ""))
+    raw_datasets = _parse_json_hp(hp.get("tuna_hf_datasets", ""))
+    hf_models: List[Dict[str, Any]] = raw_models if isinstance(raw_models, list) else []
+    hf_datasets: List[Dict[str, Any]] = raw_datasets if isinstance(raw_datasets, list) else []
+
+    if not hf_models and not hf_datasets:
+        return {}
+
+    from huggingface_hub import snapshot_download  # available in the container image
+
+    hf_token = os.environ.get("HUGGINGFACE_HUB_TOKEN", "").strip() or None
+    hf_root = WORK_DIR / ".hf"
+    hf_cache = hf_root / "cache"
+    hf_cache.mkdir(parents=True, exist_ok=True)
+
+    env: Dict[str, str] = {
+        "HF_HOME": str(hf_cache),
+        "HF_HUB_CACHE": str(hf_cache / "hub"),
+        "HF_DATASETS_CACHE": str(hf_cache / "datasets"),
+        "TRANSFORMERS_CACHE": str(hf_cache / "transformers"),
+    }
+
+    model_dirs: Dict[str, str] = {}
+    for item in hf_models:
+        repo = str((item or {}).get("repo", "")).strip()
+        if not repo:
+            continue
+        target = hf_root / "models" / _safe_slug(repo)
+        if target.exists():
+            shutil.rmtree(target)
+        kwargs: Dict[str, Any] = {"repo_id": repo, "local_dir": str(target)}
+        revision = str((item or {}).get("revision", "")).strip()
+        if revision:
+            kwargs["revision"] = revision
+        allow = [str(v) for v in ((item or {}).get("allow_patterns") or []) if str(v).strip()]
+        ignore = [str(v) for v in ((item or {}).get("ignore_patterns") or []) if str(v).strip()]
+        if allow:
+            kwargs["allow_patterns"] = allow
+        if ignore:
+            kwargs["ignore_patterns"] = ignore
+        if hf_token:
+            kwargs["token"] = hf_token
+        log(f"Prefetching HF model: {repo}")
+        snapshot_download(**kwargs)
+        model_dirs[repo] = str(target)
+
+    dataset_dirs: Dict[str, str] = {}
+    for item in hf_datasets:
+        repo = str((item or {}).get("repo", "")).strip()
+        if not repo:
+            continue
+        target = hf_root / "datasets" / _safe_slug(repo)
+        if target.exists():
+            shutil.rmtree(target)
+        kwargs = {"repo_id": repo, "repo_type": "dataset", "local_dir": str(target)}
+        revision = str((item or {}).get("revision", "")).strip()
+        if revision:
+            kwargs["revision"] = revision
+        allow = [str(v) for v in ((item or {}).get("allow_patterns") or []) if str(v).strip()]
+        ignore = [str(v) for v in ((item or {}).get("ignore_patterns") or []) if str(v).strip()]
+        if allow:
+            kwargs["allow_patterns"] = allow
+        if ignore:
+            kwargs["ignore_patterns"] = ignore
+        if hf_token:
+            kwargs["token"] = hf_token
+        log(f"Prefetching HF dataset: {repo}")
+        snapshot_download(**kwargs)
+        dataset_dirs[repo] = str(target)
+
+    if model_dirs:
+        env["HF_MODEL_DIR"] = next(iter(model_dirs.values()))
+        env["HF_MODEL_DIRS"] = json.dumps(model_dirs, sort_keys=True)
+    if dataset_dirs:
+        env["HF_DATASET_DIR"] = next(iter(dataset_dirs.values()))
+        env["HF_DATASET_DIRS"] = json.dumps(dataset_dirs, sort_keys=True)
+
+    log(f"HF prefetch complete: {len(model_dirs)} model(s), {len(dataset_dirs)} dataset(s)")
+    return env
+
+
 def run_training() -> int:
     WORK_DIR.mkdir(parents=True, exist_ok=True)
     MODEL_DIR.mkdir(parents=True, exist_ok=True)
@@ -149,6 +264,8 @@ def run_training() -> int:
     expected_name = (hp.get("tuna_expected_output_name") or "model.pkl").strip() or "model.pkl"
     expected_path = MODEL_DIR / expected_name
     log(f"Expected model artifact: {expected_path}")
+
+    hf_env = prefetch_hf_assets(hp)
 
     script_files = copy_channel_to_workdir(SCRIPT_CHANNEL)
     training_files = copy_channel_to_workdir(TRAINING_CHANNEL)
@@ -172,6 +289,7 @@ def run_training() -> int:
         raise RuntimeError("No training input file found in /opt/ml/input/data/training")
 
     runtime_env = os.environ.copy()
+    runtime_env.update(hf_env)
     runtime_env["TUNA_TASK_ID"] = hp.get("tuna_task_id", "")
     runtime_env["TUNA_EXPECTED_OUTPUT_NAME"] = expected_name
     runtime_env["TUNA_INPUT_PATH"] = str(input_path)

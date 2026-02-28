@@ -315,6 +315,8 @@ function normalizeHeadingParagraphs(text: string): string {
   const isHeaderLine = (trimmed: string) =>
     /^#{1,6}\s+/.test(trimmed) ||
     /^(?:\*\*|__)[^*_]+(?:\*\*|__)$/.test(trimmed);
+  const isListItem = (trimmed: string) =>
+    /^\d+\.\s/.test(trimmed) || /^[-*+]\s/.test(trimmed);
 
   // First pass: ensure inline heading-style **...** / __...__ start on their own line.
   const expandedLines: string[] = [];
@@ -335,7 +337,8 @@ function normalizeHeadingParagraphs(text: string): string {
     expandedLines.push(line);
   }
 
-  // Second pass: add blank lines around header paragraphs for better markdown rendering.
+  // Second pass: add blank lines around headers and before list items so
+  // markdown parsers treat them as block-level elements.
   const out: string[] = [];
   inFence = false;
   for (let i = 0; i < expandedLines.length; i += 1) {
@@ -349,8 +352,13 @@ function normalizeHeadingParagraphs(text: string): string {
 
     if (!inFence) {
       const isHeader = isHeaderLine(trimmed);
+      const isList = isListItem(trimmed);
       const prevIsBlank = out.length === 0 ? true : out[out.length - 1].trim() === "";
+      const prevIsList = out.length > 0 && isListItem(out[out.length - 1].trim());
       if (isHeader && !prevIsBlank) {
+        out.push("");
+      }
+      if (isList && !prevIsBlank && !prevIsList) {
         out.push("");
       }
       out.push(line);

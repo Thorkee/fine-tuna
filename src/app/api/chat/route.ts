@@ -14,9 +14,10 @@ export async function GET() {
 
   const { data, error } = await supabase
     .from("chats")
-    .select("*")
+    .select("id, title, created_at")
     .eq("user_id", authedUserId)
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .limit(50);
 
   if (error) {
     return Response.json({ error: error.message }, { status: 500 });

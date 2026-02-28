@@ -339,9 +339,8 @@ export async function ensureContextWindow(
 
     // 2) If summary itself is massive, clip it (best-effort safety).
     // We prefer LLM-driven compaction, but this prevents catastrophic overflow.
-    const MAX_SUMMARY_CHARS = 12_000;
-    if (state.memory.summary.length > MAX_SUMMARY_CHARS) {
-      state.memory.summary = clip(state.memory.summary, MAX_SUMMARY_CHARS);
+    if (state.memory.summary.length > config.summaryMaxChars) {
+      state.memory.summary = clip(state.memory.summary, config.summaryMaxChars);
       actions.push('clip_summary');
       changed = true;
     }
@@ -475,10 +474,17 @@ export function buildContextUsage(
   config: AgentContextWindowConfig,
   estimateInputTokens: number
 ): ContextUsage {
-  const maxInputTokens =
+  const maxInputCap =
     typeof config.maxInputTokens === 'number' && Number.isFinite(config.maxInputTokens) && config.maxInputTokens > 0
       ? config.maxInputTokens
-      : undefined;
+      : Number.POSITIVE_INFINITY;
+
+  const effectiveBudget = Math.max(
+    1,
+    Math.min(maxInputCap, config.maxContextTokens - config.maxOutputTokens) - config.safetyMarginTokens
+  );
+
+  const maxInputTokens = Number.isFinite(effectiveBudget) ? effectiveBudget : undefined;
 
   const usedFraction =
     maxInputTokens && maxInputTokens > 0
