@@ -4,12 +4,12 @@ import { z } from 'zod';
 import { randomUUID } from 'crypto';
 import type { AgentContext, Tool, ToolExecutionResult } from '../types';
 import {
-    buildParallelSearchStrategy,
     buildTierAttemptTelemetry,
     buildSourceFallbackChain,
     datasetCandidateScore,
     evaluateDesktopEscalationGuard,
     getTierDomains,
+    getTierOrder,
     sourcePolicyFromConstraintConfig,
     type SourceTier,
     type SourceTierAttemptTelemetry,
@@ -25,12 +25,6 @@ type SearchRow = {
     textSnippet?: string;
 };
 
-type TierSearchResult = {
-    tier: SourceTier | 'hf_direct';
-    rows: SearchRow[];
-    error?: string;
-};
-
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
 }
@@ -40,17 +34,6 @@ function safeDomain(url: string): string | undefined {
         return new URL(url).hostname.replace(/^www\./, '');
     } catch {
         return undefined;
-    }
-}
-
-function normalizeUrlKey(url: string): string {
-    try {
-        const parsed = new URL(url);
-        parsed.search = '';
-        parsed.hash = '';
-        return parsed.href.replace(/\/+$/, '');
-    } catch {
-        return url;
     }
 }
 
@@ -224,64 +207,6 @@ async function exaSearch(params: {
     return { ok: true, rows: normalizeRows(data, params.maxResults) };
 }
 
-async function searchHfDatasetsDirectly(
-    query: string,
-    maxResults: number,
-): Promise<TierSearchResult> {
-    const limit = Math.max(1, Math.min(15, maxResults));
-    const params = new URLSearchParams({ search: query, limit: String(limit), sort: 'downloads', direction: '-1' });
-    const url = `https://huggingface.co/api/datasets?${params}`;
-    const hfToken = (process.env.HUGGINGFACE_TOKEN || process.env.HF_TOKEN || '').trim();
-    const headers: Record<string, string> = { Accept: 'application/json' };
-    if (hfToken) headers.Authorization = `Bearer ${hfToken}`;
-
-    const resp = await fetch(url, { headers, signal: AbortSignal.timeout(8_000) });
-    if (!resp.ok) {
-        return { tier: 'hf_direct', rows: [], error: `HF Hub API ${resp.status}` };
-    }
-    const data: unknown = await resp.json();
-    if (!Array.isArray(data)) return { tier: 'hf_direct', rows: [] };
-
-    const rows: SearchRow[] = data.slice(0, limit).map((item: unknown): SearchRow | null => {
-        if (!isRecord(item)) return null;
-        const id = typeof item.id === 'string' ? item.id : '';
-        if (!id) return null;
-        const repoUrl = `https://huggingface.co/datasets/${id}`;
-        const title = id;
-        const publishedDate = typeof item.lastModified === 'string' ? item.lastModified : undefined;
-        const description = typeof item.description === 'string' ? item.description.slice(0, 800) : undefined;
-        return {
-            title,
-            url: repoUrl,
-            domain: 'huggingface.co',
-            publishedDate,
-            textSnippet: description,
-            score: 0.75,
-        };
-    }).filter((row): row is SearchRow => Boolean(row));
-
-    return { tier: 'hf_direct', rows };
-}
-
-async function exaSearchForTier(params: {
-    tier: SourceTier;
-    apiKey: string;
-    query: string;
-    maxResults: number;
-    includeDomains: string[] | undefined;
-}): Promise<TierSearchResult> {
-    const result = await exaSearch({
-        apiKey: params.apiKey,
-        query: params.query,
-        maxResults: params.maxResults,
-        includeDomains: params.includeDomains,
-    });
-    if (!result.ok) {
-        return { tier: params.tier, rows: [], error: result.message };
-    }
-    return { tier: params.tier, rows: result.rows };
-}
-
 const datasetSearchArgsSchema = z.object({
     query: z.string().min(1).max(5000),
     maxResults: z.number().int().min(1).max(15).optional(),
@@ -293,7 +218,7 @@ export const datasetSearchTool: Tool = {
     definition: {
         name: 'dataset_search',
         description:
-            'Discover datasets using parallel multi-tier search: Hugging Face Hub API + Exa tier1 (HF) + Exa tier2 (GitHub/Kaggle) fire concurrently, with conditional open-web fallback. Returns per-tier fallback reasons and desktop-escalation eligibility telemetry.',
+            'Discover datasets with explicit fallback order: Hugging Face first, then GitHub/Kaggle, then Exa/Firecrawl open-web discovery, then Desktop escalation for blockers. Returns per-tier fallback reasons and desktop-escalation eligibility telemetry.',
         parameters: {
             type: 'object',
             properties: {
@@ -322,14 +247,14 @@ export const datasetSearchTool: Tool = {
         const maxResults = parsed.data.maxResults ?? 10;
         const policy = sourcePolicyFromConstraintConfig(context.constraints?.sourcePolicy);
         const MIN_ACCEPTABLE_SCORE = 0.55;
-        const strategy = buildParallelSearchStrategy(parsed.data.query, 'dataset', policy);
+        const tierOrder: SourceTier[] = (() => {
+            const base: SourceTier[] = getTierOrder(policy);
+            if (!parsed.data.includeTier3) return base;
+            if (base.includes('tier3')) return base;
+            return [...base, 'tier3'];
+        })();
 
-        if (parsed.data.includeTier3 && strategy.conditionalTier !== 'tier3' && !strategy.parallelTiers.includes('tier3')) {
-            strategy.parallelTiers.push('tier3');
-            strategy.conditionalTier = null;
-        }
-
-        type ScoredCandidate = {
+        const candidateByUrl = new Map<string, {
             title: string;
             url: string;
             domain?: string;
@@ -339,15 +264,24 @@ export const datasetSearchTool: Tool = {
             totalScore: number;
             scoreBreakdown: ReturnType<typeof datasetCandidateScore>['breakdown'];
             notes: string;
-        };
+        }>();
 
-        const candidateByUrl = new Map<string, ScoredCandidate>();
         const attempts: SourceTierAttemptTelemetry[] = [];
+        for (const tier of tierOrder) {
+            const includeDomains = tier === 'tier3' ? undefined : getTierDomains('dataset', tier, policy);
+            const search = await exaSearch({
+                apiKey,
+                query: parsed.data.query,
+                maxResults,
+                includeDomains: includeDomains && includeDomains.length > 0 ? includeDomains : undefined,
+            });
+            if (!search.ok) {
+                return { ok: false, error: { name: 'ExaError', message: search.message } };
+            }
 
-        function ingestRows(rows: SearchRow[], tier: SourceTier): { bestScore: number | null; viableCount: number } {
-            let bestScore: number | null = null;
-            let viableCount = 0;
-            for (const row of rows) {
+            let tierBestScore: number | null = null;
+            let tierViableCandidates = 0;
+            for (const row of search.rows) {
                 const descriptiveText = `${row.highlights?.join('\n') ?? ''}\n${row.textSnippet ?? ''}`;
                 const scored = datasetCandidateScore({
                     title: row.title,
@@ -357,16 +291,15 @@ export const datasetSearchTool: Tool = {
                     publishedDate: row.publishedDate,
                     policy,
                 });
-                if (bestScore === null || scored.total > bestScore) {
-                    bestScore = scored.total;
+                if (tierBestScore === null || scored.total > tierBestScore) {
+                    tierBestScore = scored.total;
                 }
                 if (scored.total >= MIN_ACCEPTABLE_SCORE) {
-                    viableCount += 1;
+                    tierViableCandidates += 1;
                 }
-                const urlKey = normalizeUrlKey(row.url);
-                const existing = candidateByUrl.get(urlKey);
+                const existing = candidateByUrl.get(row.url);
                 if (existing && existing.totalScore >= scored.total) continue;
-                candidateByUrl.set(urlKey, {
+                candidateByUrl.set(row.url, {
                     title: row.title,
                     url: row.url,
                     domain: row.domain,
@@ -378,114 +311,19 @@ export const datasetSearchTool: Tool = {
                     notes: descriptiveText.slice(0, 1000),
                 });
             }
-            return { bestScore, viableCount };
-        }
 
-        // Phase 1: fire parallel searches
-        const parallelPromises: Promise<TierSearchResult>[] = [];
-
-        if (strategy.hfDirectSearch) {
-            parallelPromises.push(
-                searchHfDatasetsDirectly(parsed.data.query, maxResults)
-                    .catch((err): TierSearchResult => ({ tier: 'hf_direct', rows: [], error: String(err) })),
-            );
-        }
-
-        for (const tier of strategy.parallelTiers) {
-            const includeDomains = tier === 'tier3' ? undefined : getTierDomains('dataset', tier, policy);
-            parallelPromises.push(
-                exaSearchForTier({
-                    tier,
-                    apiKey,
-                    query: parsed.data.query,
-                    maxResults,
-                    includeDomains: includeDomains && includeDomains.length > 0 ? includeDomains : undefined,
-                }).catch((err): TierSearchResult => ({ tier, rows: [], error: String(err) })),
-            );
-        }
-
-        const settled = await Promise.allSettled(parallelPromises);
-        const tierResults: TierSearchResult[] = settled.map(s =>
-            s.status === 'fulfilled' ? s.value : { tier: 'tier1' as SourceTier, rows: [], error: String(s.reason) },
-        );
-
-        // Ingest HF-direct results into tier1 bucket
-        for (const result of tierResults) {
-            if (result.tier === 'hf_direct') {
-                ingestRows(result.rows, 'tier1');
-            }
-        }
-
-        // Ingest Exa tier results and build telemetry
-        for (const tier of strategy.parallelTiers) {
-            const result = tierResults.find(r => r.tier === tier);
-            if (!result || result.error) {
-                attempts.push(buildTierAttemptTelemetry({
-                    tier,
-                    includeDomains: null,
-                    numResults: 0,
-                    minResultsRequired: Math.max(1, policy.minResultsPerTier),
-                    viableCandidates: 0,
-                    bestScore: null,
-                    minAcceptableScore: MIN_ACCEPTABLE_SCORE,
-                    canEscalate: tier !== 'tier3',
-                }));
-                continue;
-            }
-            const { bestScore, viableCount } = ingestRows(result.rows, tier);
-            const includeDomains = tier === 'tier3' ? undefined : getTierDomains('dataset', tier, policy);
-            attempts.push(buildTierAttemptTelemetry({
+            const attempt = buildTierAttemptTelemetry({
                 tier,
                 includeDomains: includeDomains && includeDomains.length > 0 ? includeDomains : null,
-                numResults: result.rows.length,
+                numResults: search.rows.length,
                 minResultsRequired: Math.max(1, policy.minResultsPerTier),
-                viableCandidates: viableCount,
-                bestScore,
+                viableCandidates: tierViableCandidates,
+                bestScore: tierBestScore,
                 minAcceptableScore: MIN_ACCEPTABLE_SCORE,
                 canEscalate: tier !== 'tier3',
-            }));
-        }
-
-        // Phase 2: conditional tier3 if parallel phase was insufficient
-        const totalViable = Array.from(candidateByUrl.values()).filter(c => c.totalScore >= MIN_ACCEPTABLE_SCORE).length;
-        if (strategy.conditionalTier && totalViable < Math.max(1, policy.minResultsPerTier)) {
-            const tier3Search = await exaSearchForTier({
-                tier: strategy.conditionalTier,
-                apiKey,
-                query: parsed.data.query,
-                maxResults,
-                includeDomains: undefined,
-            }).catch((err): TierSearchResult => ({ tier: strategy.conditionalTier!, rows: [], error: String(err) }));
-
-            if (tier3Search.error) {
-                attempts.push(buildTierAttemptTelemetry({
-                    tier: strategy.conditionalTier,
-                    includeDomains: null,
-                    numResults: 0,
-                    minResultsRequired: Math.max(1, policy.minResultsPerTier),
-                    viableCandidates: 0,
-                    bestScore: null,
-                    minAcceptableScore: MIN_ACCEPTABLE_SCORE,
-                    canEscalate: false,
-                }));
-            } else {
-                const { bestScore, viableCount } = ingestRows(tier3Search.rows, strategy.conditionalTier);
-                attempts.push(buildTierAttemptTelemetry({
-                    tier: strategy.conditionalTier,
-                    includeDomains: null,
-                    numResults: tier3Search.rows.length,
-                    minResultsRequired: Math.max(1, policy.minResultsPerTier),
-                    viableCandidates: viableCount,
-                    bestScore,
-                    minAcceptableScore: MIN_ACCEPTABLE_SCORE,
-                    canEscalate: false,
-                }));
-            }
-        }
-
-        if (candidateByUrl.size === 0 && tierResults.every(r => !!r.error)) {
-            const messages = tierResults.map(r => r.error).filter(Boolean);
-            return { ok: false, error: { name: 'SearchError', message: `All search tiers failed: ${messages.join('; ')}` } };
+            });
+            attempts.push(attempt);
+            if (!attempt.escalated) break;
         }
 
         const ranked = Array.from(candidateByUrl.values())
@@ -517,11 +355,6 @@ export const datasetSearchTool: Tool = {
             performedAt: new Date().toISOString(),
             query: parsed.data.query,
             tierUsed,
-            searchStrategy: {
-                parallelTiers: strategy.parallelTiers,
-                conditionalTier: strategy.conditionalTier,
-                hfDirectSearch: strategy.hfDirectSearch,
-            },
             policy: {
                 strictness: policy.strictness,
                 fallbackToGovSources: policy.fallbackToGovSources,
@@ -568,3 +401,4 @@ export const datasetSearchTool: Tool = {
         };
     },
 };
+

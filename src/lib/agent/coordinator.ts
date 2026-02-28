@@ -105,7 +105,6 @@ import { parseMcpToolName } from '../mcp/naming';
 import { McpRuntime } from '../mcp/runtime';
 import { isMcpToolApproved, recordMcpToolApproval } from '../mcp/user-servers';
 import { getConfiguredLlmProvider } from '../llm/provider';
-import { resolveTraceRoutingPolicy } from '../llm/trace-routing';
 
 function isRecord(value: unknown): value is Record<string, unknown> {
     return typeof value === 'object' && value !== null;
@@ -427,11 +426,6 @@ function isTransientError(err: unknown): boolean {
     if (lower.includes('fetch failed')) return true;
     if (lower.includes('network') && lower.includes('error')) return true;
     if (lower.includes('socket') && (lower.includes('hang up') || lower.includes('error'))) return true;
-
-    // Expired AWS session tokens (short-lived STS credentials)
-    if (lower.includes('expired') && (lower.includes('token') || lower.includes('credential'))) return true;
-    if (lower.includes('expiredtokenexception')) return true;
-    if (lower.includes('could not load credentials')) return true;
     if (lower.includes('aborted')) return true;
 
     // MCP transport errors
@@ -2373,11 +2367,6 @@ MANAGED COMPUTE & TRAINING (capabilities):
 - Never expose or request runner URLs/tokens/API keys. Configuration/auth is handled server-side.
 - When describing these abilities to users, use product terms (e.g. "I can run this in our sandbox") and avoid naming infrastructure vendors.
 - The full, current tool list appears in the inventory below; only call tools allowed for your active skill.
-
-FINETUNING DEFAULTS:
-- When selecting base models for fine-tuning, prefer Mistral-family models (Mistral, Mixtral, Magistral, Devstral) unless the user explicitly requests otherwise.
-- Default training backend is AWS SageMaker; fall back to sandbox execution only if SageMaker is not configured.
-- Enable Weights & Biases experiment tracking by default when WANDB_API_KEY is available.
 `.trim();
 
     private buildSystemPrompt(
@@ -2417,21 +2406,6 @@ FINETUNING DEFAULTS:
         const reflectingDirective = this.state.phase === 'reflecting'
             ? `IMPORTANT: You are in reflection/recovery mode. Review recent tool errors and update the plan (mark steps failed/blocked, adjust the plan, or ask the user) before continuing.`
             : '';
-        const traceRoutingPolicy = resolveTraceRoutingPolicy({
-            provider: this.context.constraints?.provider ?? getConfiguredLlmProvider(),
-            modelId: process.env.AWS_BEDROCK_MODEL_ID,
-        });
-        const strictTraceRoutingDirective = traceRoutingPolicy.injectStrictDirective
-            ? `OUTPUT ROUTING (CRITICAL):
-- Progress lines MUST start with TRACE: and contain only progress content.
-- User-facing final output MUST start with FINAL:.
-- After FINAL: begins, do not switch back to TRACE: in the same turn.
-- If you are unsure whether text is progress or final, default to FINAL:.`
-            : `OUTPUT ROUTING:
-- When providing progress/status updates, prefix with TRACE: to keep them collapsible.
-- Your main user-facing response should begin with FINAL: (or have no prefix at all).
-- Prefer writing your final answer without a prefix — unprefixed text is treated as the answer.
-- Only use TRACE: for short internal progress notes. Never put your main answer behind TRACE:.`;
 
         const attachedFiles = Array.isArray(this.context.inputFiles) ? this.context.inputFiles : [];
         const attachedFilesBlock = attachedFiles.length > 0
@@ -2487,7 +2461,6 @@ ${planLines}
 ${planProgressDirective}
 ${planningDirective}
 ${reflectingDirective}
-${strictTraceRoutingDirective}
 `;
     }
 }

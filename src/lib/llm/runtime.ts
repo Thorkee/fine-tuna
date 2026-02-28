@@ -37,7 +37,7 @@ export type LlmRuntime = {
     options?: { onUsage?: (usage: LlmUsage) => void }
   ): Promise<FunctionCallResult>;
   recommendModel(
-    requirements: { budget: { min: number; max: number }; timeline: string; accuracyPriority: string; preferredFamily?: string },
+    requirements: { budget: { min: number; max: number }; timeline: string; accuracyPriority: string },
     context: ProjectContext
   ): Promise<ModelRecommendation>;
 };

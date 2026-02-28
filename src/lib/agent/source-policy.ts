@@ -17,8 +17,7 @@ export type SourceFallbackReason =
     | 'insufficient_results'
     | 'insufficient_viable_candidates'
     | 'insufficient_quality'
-    | 'tier_exhausted'
-    | 'api_error';
+    | 'tier_exhausted';
 
 export type SourceTierAttemptTelemetry = {
     tier: SourceTier;
@@ -680,75 +679,5 @@ export function extractLikelyModelId(url: string): string | undefined {
         // No-op
     }
     return undefined;
-}
-
-export type ParallelSearchStrategy = {
-    parallelTiers: SourceTier[];
-    conditionalTier: SourceTier | null;
-    skipTiers: SourceTier[];
-    hfDirectSearch: boolean;
-};
-
-const TIER2_SIGNALS = [
-    'kaggle.com', 'kaggle competition', 'kaggle dataset',
-    'github.com', 'github repo', 'github repository',
-    'government data', 'census', 'data.gov', 'open data portal',
-    'data.gov.uk', 'data.europa.eu', 'world bank', 'data.un.org',
-];
-
-const TIER3_SIGNALS = [
-    'arxiv', 'research paper', 'crawl', 'scrape', 'web scraping',
-    'blog post', 'medium.com', 'stackoverflow',
-];
-
-export function inferBestStartingTier(query: string): SourceTier {
-    const normalized = String(query || '').toLowerCase();
-    if (!normalized) return 'tier1';
-
-    const tier2Hits = TIER2_SIGNALS.filter(s => normalized.includes(s)).length;
-    const tier3Hits = TIER3_SIGNALS.filter(s => normalized.includes(s)).length;
-
-    if (tier3Hits > tier2Hits && tier3Hits > 0) return 'tier3';
-    if (tier2Hits > 0) return 'tier2';
-    return 'tier1';
-}
-
-export function buildParallelSearchStrategy(
-    query: string,
-    intent: SourceDiscoveryIntent,
-    policy: SourcePolicySettings,
-): ParallelSearchStrategy {
-    const allowedTiers = getTierOrder(policy);
-    const bestTier = inferBestStartingTier(query);
-
-    if (bestTier === 'tier3' && allowedTiers.includes('tier3')) {
-        return {
-            parallelTiers: allowedTiers,
-            conditionalTier: null,
-            skipTiers: [],
-            hfDirectSearch: false,
-        };
-    }
-
-    if (bestTier === 'tier2') {
-        const parallel: SourceTier[] = [];
-        if (allowedTiers.includes('tier2')) parallel.push('tier2');
-        if (allowedTiers.includes('tier1')) parallel.push('tier1');
-        return {
-            parallelTiers: parallel.length > 0 ? parallel : ['tier1'],
-            conditionalTier: allowedTiers.includes('tier3') ? 'tier3' : null,
-            skipTiers: [],
-            hfDirectSearch: false,
-        };
-    }
-
-    const parallel: SourceTier[] = ['tier1'];
-    if (allowedTiers.includes('tier2')) parallel.push('tier2');
-    return {
-        parallelTiers: parallel,
-        conditionalTier: allowedTiers.includes('tier3') ? 'tier3' : null,
-        skipTiers: [],
-        hfDirectSearch: intent === 'dataset',
-    };
 }
 
