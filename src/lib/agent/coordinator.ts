@@ -101,9 +101,7 @@ import {
 import { sanitizeMessagesForToolProtocol } from './tool-protocol';
 import { buildSourcePolicySettings, sourcePolicyFromConstraintConfig } from './source-policy';
 import { getDisabledToolsFromSkillPreferences } from './skill-preferences';
-import { parseMcpToolName } from '../mcp/naming';
 import { McpRuntime } from '../mcp/runtime';
-import { isMcpToolApproved, recordMcpToolApproval } from '../mcp/user-servers';
 import { getConfiguredLlmProvider } from '../llm/provider';
 import { resolveTraceRoutingPolicy } from '../llm/trace-routing';
 
@@ -177,16 +175,6 @@ function stringifyToolResult(result: unknown): string {
             return '{"ok":false,"error":{"message":"Tool result serialization failed."}}';
         }
     }
-}
-
-function parseApprovalDecision(message: string): 'approve' | 'deny' | null {
-    const normalized = message.trim().toLowerCase();
-    if (!normalized) return null;
-    if (normalized === 'approve' || normalized === 'approved' || normalized.startsWith('approve ')) return 'approve';
-    if (normalized === 'deny' || normalized === 'denied' || normalized.startsWith('deny ')) return 'deny';
-    if (normalized === 'yes' || normalized === 'y') return 'approve';
-    if (normalized === 'no' || normalized === 'n') return 'deny';
-    return null;
 }
 
 function getWebSearchDetail(args: Record<string, unknown> | null): string {
@@ -979,22 +967,10 @@ export class AgentCoordinator {
         return runtime;
     }
 
-    private async getMcpToolDefinitionsForSkill(skillId: string): Promise<FunctionDefinition[]> {
-        const enabledServers = this.state.constraints.mcp?.enabledServers ?? [];
-        if (enabledServers.length === 0) return [];
+    private async getMcpToolDefinitions(): Promise<FunctionDefinition[]> {
         const runtime = this.getMcpRuntime();
         if (!runtime) return [];
-        const skill = registry.getSkill(skillId);
-        if (!skill) return [];
-
-        const declared = new Set(skill.tools);
-        const allowAll = declared.has('mcp_tools');
-        const explicit = new Set(skill.tools.filter((toolId) => toolId.startsWith('mcp.')));
-        if (!allowAll && explicit.size === 0) return [];
-
-        const definitions = await runtime.listToolDefinitions();
-        if (allowAll) return definitions;
-        return definitions.filter((tool) => explicit.has(tool.name));
+        return runtime.listToolDefinitions();
     }
 
     private normalizePendingToolCall(pending: AgentState['pendingApproval']): {
@@ -1170,120 +1146,10 @@ export class AgentCoordinator {
             }
         };
 
-        let skipUserMessage = false;
         if (this.state.pendingApproval) {
-            const decision = parseApprovalDecision(userMessage);
-            if (!decision) {
-                this.state.phase = 'blocked';
-                recordPhaseStatus(this.state.phase);
-                await this.saveState();
-                flushUiUpserts();
-                flushUiOpens();
-                return {
-                    content: 'An MCP tool call is awaiting approval. Reply "approve" to proceed or "deny" to cancel.',
-                    ui: {
-                        openArtifactId: this.state.ui.openArtifactId,
-                        openArtifactAt: uiOpens[uiOpens.length - 1]?.at,
-                        upserts: uiUpserts,
-                    },
-                    status: { phase: this.state.phase, events: statusEvents },
-                };
-            }
-
-            const pending = this.state.pendingApproval;
-            const { toolCall, toolCallId, args } = this.normalizePendingToolCall(pending);
-            const toolName = pending.toolName;
-
             this.state.pendingApproval = undefined;
-            if (decision === 'deny') {
-                const result = {
-                    ok: false,
-                    error: { name: 'UserDenied', message: `User denied MCP tool request: ${toolName}` },
-                };
-                this.state.memory.shortTerm.push({
-                    role: 'assistant',
-                    content: null,
-                    tool_calls: [toolCall],
-                });
-                this.state.memory.shortTerm.push({
-                    role: 'tool',
-                    tool_call_id: toolCallId,
-                    name: toolName,
-                    content: stringifyToolResult(result),
-                });
-                this.state.phase = 'reflecting';
-                recordPhaseStatus(this.state.phase);
-                await this.saveState();
-                flushUiUpserts();
-                flushUiOpens();
-                return {
-                    content: 'Okay — I will not run that MCP tool. Tell me how you want to proceed.',
-                    ui: {
-                        openArtifactId: this.state.ui.openArtifactId,
-                        openArtifactAt: uiOpens[uiOpens.length - 1]?.at,
-                        upserts: uiUpserts,
-                    },
-                    status: { phase: this.state.phase, events: statusEvents },
-                };
-            }
-
-            const parsed = parseMcpToolName(toolName);
-            if (parsed && pending.userServerId && this.context.userId) {
-                await recordMcpToolApproval(this.context.userId, pending.userServerId, parsed.toolName);
-            }
-
-            const runtime = this.getMcpRuntime();
-            if (!runtime) {
-                this.state.phase = 'failed';
-                recordPhaseStatus(this.state.phase);
-                await this.saveState();
-                flushUiUpserts();
-                flushUiOpens();
-                return {
-                    content: 'MCP runtime unavailable. Please retry after reloading the session.',
-                    ui: {
-                        openArtifactId: this.state.ui.openArtifactId,
-                        openArtifactAt: uiOpens[uiOpens.length - 1]?.at,
-                        upserts: uiUpserts,
-                    },
-                    status: { phase: this.state.phase, events: statusEvents },
-                };
-            }
-
-            counters.toolCallsTotal += 1;
-            const start = Date.now();
-            let rawResult: Awaited<ReturnType<typeof runtime.callToolByQualifiedName>>;
-            try {
-                rawResult = await runtime.callToolByQualifiedName(toolName, args);
-            } catch (mcpErr: unknown) {
-                // Wrap unhandled MCP exceptions so the run doesn't crash.
-                const errMsg = mcpErr instanceof Error ? mcpErr.message : String(mcpErr);
-                console.error(`[Agent] MCP tool call failed (approved, tool=${toolName}):`, mcpErr);
-                rawResult = {
-                    ok: false,
-                    error: { message: errMsg, name: mcpErr instanceof Error ? mcpErr.name : undefined },
-                };
-            }
-            rawResult.meta = { ...(rawResult.meta || {}), durationMs: Date.now() - start };
-            await applySideEffects(this.state, rawResult.sideEffects, uiUpserts, uiOpens, this.context);
-            flushUiUpserts();
-            flushUiOpens();
-
-            this.state.memory.shortTerm.push({
-                role: 'assistant',
-                content: null,
-                tool_calls: [toolCall],
-            });
-            this.state.memory.shortTerm.push({
-                role: 'tool',
-                tool_call_id: toolCallId,
-                name: toolName,
-                content: stringifyToolResult(rawResult),
-            });
-            skipUserMessage = true;
-        } else {
-            this.state.memory.shortTerm.push({ role: 'user', content: userMessage });
         }
+        this.state.memory.shortTerm.push({ role: 'user', content: userMessage });
 
         // Plan-first: if no plan/goal exists, start in planning.
         this.state.phase = (!this.state.goal || this.state.plan.length === 0) ? 'planning' : 'executing';
@@ -1293,7 +1159,7 @@ export class AgentCoordinator {
         const hasPriorAssistant = Array.isArray(opts?.history)
             ? opts.history.some(m => m.role === 'assistant')
             : this.state.memory.shortTerm.some(m => m.role === 'assistant');
-        if (!skipUserMessage) {
+        {
             const refinedIntent = await this.maybeRefineIntentFromClarification(userMessage, uiUpserts, uiOpens, hasPriorAssistant);
             if (refinedIntent) {
                 flushUiUpserts();
@@ -1378,7 +1244,7 @@ export class AgentCoordinator {
             recordPhaseStatus(this.state.phase);
 
             const baseTools = this.getContextualToolsForSkill(currentSkillId);
-            const mcpTools = await this.getMcpToolDefinitionsForSkill(currentSkillId);
+            const mcpTools = await this.getMcpToolDefinitions();
             const allowedToolNames = [
                 ...baseTools.map(t => t.definition.name),
                 ...mcpTools.map(t => t.name),
@@ -1660,7 +1526,7 @@ export class AgentCoordinator {
             // the model properly calls set_plan.
             if ((!this.state.goal || this.state.plan.length === 0) && Array.isArray(response.toolCalls) && response.toolCalls.length > 0) {
                 if (!this.state.goal) {
-                    const goalSeed = skipUserMessage ? '' : userMessage;
+                    const goalSeed = userMessage;
                     this.state.goal = goalSeed.trim() || null;
                 }
             }
@@ -1711,61 +1577,6 @@ export class AgentCoordinator {
                     if (counters.toolCallsTotal >= maxToolCallsTotal) {
                         toolBudgetHit = true;
                         break;
-                    }
-
-                    const mcpInfo = toolNamePreview ? parseMcpToolName(toolNamePreview) : null;
-                    if (mcpInfo) {
-                        const runtime = this.getMcpRuntime();
-                        const server = runtime?.getServer(mcpInfo.serverId);
-                        if (server?.origin === 'user') {
-                            if (!this.context.userId) {
-                                this.state.phase = 'blocked';
-                                recordPhaseStatus(this.state.phase);
-                                await this.saveState();
-                                flushUiUpserts();
-                                flushUiOpens();
-                                return {
-                                    content: 'You must be signed in to approve MCP tools. Please sign in and retry.',
-                                    ui: {
-                                        openArtifactId: this.state.ui.openArtifactId,
-                                        openArtifactAt: uiOpens[uiOpens.length - 1]?.at,
-                                        upserts: uiUpserts,
-                                    },
-                                    status: { phase: this.state.phase, events: statusEvents },
-                                };
-                            }
-
-                            const approved = await isMcpToolApproved(
-                                this.context.userId,
-                                server.userServerId ?? server.id,
-                                mcpInfo.toolName
-                            );
-                            if (!approved) {
-                                this.state.pendingApproval = {
-                                    kind: 'mcp_tool',
-                                    toolName: toolNamePreview,
-                                    toolCall: call,
-                                    skillId: currentSkillId,
-                                    serverId: server.id,
-                                    userServerId: server.userServerId,
-                                    requestedAt: new Date().toISOString(),
-                                };
-                                this.state.phase = 'blocked';
-                                recordPhaseStatus(this.state.phase);
-                                await this.saveState();
-                                flushUiUpserts();
-                                flushUiOpens();
-                                return {
-                                    content: `This MCP tool needs your approval before I can run it.\n\nServer: ${server.label}\nTool: ${mcpInfo.toolName}\n\nReply "approve" to run it once, or "deny" to cancel.`,
-                                    ui: {
-                                        openArtifactId: this.state.ui.openArtifactId,
-                                        openArtifactAt: uiOpens[uiOpens.length - 1]?.at,
-                                        upserts: uiUpserts,
-                                    },
-                                    status: { phase: this.state.phase, events: statusEvents },
-                                };
-                            }
-                        }
                     }
 
                     const { toolName, result } = await executeToolCall(
@@ -1906,7 +1717,7 @@ export class AgentCoordinator {
             // Fallback plans cause duplicate-plan artifacts in the timeline.
             if (planningRequired && this.state.plan.length === 0) {
                 if (!this.state.goal) {
-                    const goal = skipUserMessage ? '' : userMessage;
+                    const goal = userMessage;
                     this.state.goal = goal.trim() || null;
                 }
                 this.state.memory.shortTerm.push({

@@ -126,53 +126,59 @@ export default function AgentStatusCard(props: {
 
   return (
     <div className="not-prose my-0">
-      <div className="inline-flex flex-wrap items-center gap-1.5 text-[11px]">
-        {active ? (
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
-        ) : (
-          <span className="text-emerald-500/70 dark:text-emerald-400/70 select-none text-[10px] shrink-0">
-            ✓
-          </span>
-        )}
-        <span className="font-medium text-primary/80">{label}</span>
+      <div className="flex items-center gap-0">
+        <span className="font-mono text-xs text-emerald-500/70 dark:text-emerald-400/70">$</span>
+        <span className="ml-1.5 font-mono text-xs text-emerald-400/50 dark:text-emerald-300/50">tuna</span>
+        <span className="font-mono text-xs text-zinc-500 dark:text-zinc-500 mx-1">—</span>
+        <span className="font-mono text-xs text-zinc-400 dark:text-zinc-500">
+          {label.toLowerCase()}
+        </span>
         {detail ? (
-          <span className="text-secondary/60 text-[10px]">{detail}</span>
+          <span className="font-mono text-xs text-zinc-400/60 dark:text-zinc-600 ml-1.5">
+            {detail.toLowerCase()}
+          </span>
         ) : null}
         {totalElapsed && !active ? (
-          <span className="text-[10px] text-secondary/40 tabular-nums ml-0.5">
-            ({totalElapsed})
+          <span className="font-mono text-[10px] text-zinc-400/50 dark:text-zinc-600 ml-1.5 tabular-nums">
+            {totalElapsed}
           </span>
         ) : null}
+        {active ? <span className="terminal-prompt-cursor" /> : null}
         {hasHistory ? (
           <button
             type="button"
             onClick={() => setOpen((prev) => !prev)}
-            className="text-[10px] text-secondary/50 hover:text-primary/70 ml-0.5 transition-colors"
+            className="font-mono text-[10px] text-zinc-500/50 hover:text-zinc-400 ml-2 transition-colors"
           >
             {open ? "▾ collapse" : `▸ ${remaining} step${remaining > 1 ? "s" : ""}`}
           </button>
         ) : null}
       </div>
       {open ? (
-        <div className="mt-1.5 w-full space-y-px text-[11px] border-l-2 border-emerald-500/15 dark:border-emerald-400/15 ml-0.5 pl-3">
+        <div className="mt-1 w-full space-y-px border-l border-emerald-500/15 dark:border-emerald-400/10 ml-[7px] pl-3">
           {formattedEvents.map((event, idx) => (
             <div
               key={`${event.time || "event"}-${idx}`}
-              className="flex items-baseline gap-2 min-w-0 py-0.5"
+              className="flex items-center gap-0 py-0.5"
             >
-              <span className="min-w-0 flex-1">
-                <span className="font-medium text-primary/70">{event.label}</span>
-                {event.detail ? (
-                  <span className="text-secondary/50 ml-1">{event.detail}</span>
-                ) : null}
+              <span className="font-mono text-[10px] text-zinc-500/40 dark:text-zinc-600 select-none">
+                $
               </span>
+              <span className="font-mono text-[10px] text-zinc-400/70 dark:text-zinc-500 ml-1">
+                {event.label.toLowerCase()}
+              </span>
+              {event.detail ? (
+                <span className="font-mono text-[10px] text-zinc-400/50 dark:text-zinc-600 ml-1.5">
+                  {event.detail.toLowerCase()}
+                </span>
+              ) : null}
               {event.elapsed ? (
-                <span className="shrink-0 tabular-nums text-[9px] text-secondary/40 bg-secondary/5 rounded px-1 py-0.5">
+                <span className="font-mono text-[9px] text-zinc-400/40 dark:text-zinc-600 tabular-nums ml-1.5">
                   {event.elapsed}
                 </span>
               ) : null}
               {event.time ? (
-                <span className="shrink-0 ml-auto tabular-nums text-[9px] text-secondary/30">
+                <span className="font-mono text-[9px] text-zinc-500/30 dark:text-zinc-700 tabular-nums ml-auto">
                   {event.time}
                 </span>
               ) : null}

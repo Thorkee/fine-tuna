@@ -111,8 +111,8 @@ export interface AgentConstraints {
      */
     sourcePolicy?: AgentSourcePolicy;
     /**
-     * Optional MCP (Model Context Protocol) tool gating. Server-only config stays in env;
-     * user preferences only pass enabled server ids.
+     * MCP (Model Context Protocol) configuration. All configured servers are enabled
+     * by default — no gating is applied.
      */
     mcp?: {
         enabledServers?: string[];

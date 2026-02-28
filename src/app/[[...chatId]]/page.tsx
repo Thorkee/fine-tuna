@@ -2941,6 +2941,83 @@ export function ChatShell() {
     }
     reconnectRetryCountRef.current = 0;
     let cancelled = false;
+    let lastSyncAt = 0;
+    const SYNC_INTERVAL_MS = 3000;
+
+    const syncMessages = async (chatId: string) => {
+      try {
+        const [msgs, persisted] = await Promise.all([
+          db.getMessages(chatId),
+          fetch(`/api/chat/state/${chatId}`)
+            .then((r) => (r.ok ? r.json() : null))
+            .catch(() => null),
+        ]);
+        if (cancelled) return;
+        if (!msgs || !Array.isArray(msgs)) return;
+
+        const nextMessages = (msgs as unknown as Message[]).map((m) => {
+          const raw = m as Message & {
+            reasoning_summary?: string;
+            trace_segments?: unknown;
+            reasoning_segments?: unknown;
+            render_order?: unknown;
+          };
+          let next: Message = raw;
+          if (!next.reasoningSummary && typeof raw.reasoning_summary === "string") {
+            next = { ...next, reasoningSummary: raw.reasoning_summary };
+          }
+          const traceInput =
+            Array.isArray(raw.trace_segments) ? raw.trace_segments : next.traceSegments;
+          if (traceInput) {
+            const normalized = normalizeTraceSegments(traceInput);
+            if (normalized.length > 0) {
+              next = { ...next, traceSegments: normalized };
+            }
+          }
+          const reasoningInput =
+            Array.isArray(raw.reasoning_segments)
+              ? raw.reasoning_segments
+              : next.reasoningSegments;
+          const normalizedReasoning = normalizeReasoningSegments(
+            reasoningInput,
+            next.reasoningSummary,
+            next.id
+          );
+          if (normalizedReasoning.length > 0) {
+            next = { ...next, reasoningSegments: normalizedReasoning };
+          }
+          const renderOrderRaw =
+            Array.isArray(raw.render_order) ? raw.render_order : next.renderOrder;
+          const normalizedOrder = normalizeRenderOrder(renderOrderRaw);
+          if (normalizedOrder.length > 0) {
+            next = { ...next, renderOrder: normalizedOrder };
+          }
+          return next;
+        });
+
+        setMessages(nextMessages);
+        hasMessagesRef.current = nextMessages.length > 0;
+
+        if (persisted && typeof persisted === "object") {
+          const raw = (persisted as { artifacts?: unknown }).artifacts;
+          if (Array.isArray(raw)) {
+            for (const item of raw) {
+              if (!item || typeof item !== "object") continue;
+              const obj = item as Record<string, unknown>;
+              const rawId = typeof obj.id === "string" ? obj.id : "";
+              const rawType = typeof obj.type === "string" ? obj.type.trim() : "";
+              const artifactType = rawType || inferArtifactTypeFromId(rawId) || "markdown";
+              const normalizedId = normalizeArtifactId(rawId, artifactType);
+              if (!normalizedId.trim()) continue;
+              const data = obj.data ?? obj.content ?? obj.payload;
+              addArtifact({ id: normalizedId, type: artifactType, data });
+            }
+          }
+        }
+      } catch {
+        // Best-effort: don't block polling on sync failure
+      }
+    };
 
     const checkActiveRun = async () => {
       const chatId = currentChatIdRef.current;
@@ -2971,6 +3048,12 @@ export function ChatShell() {
           // If we were using a local placeholder run id, replace it with the server run.
           if (latest.id !== activeRun.id && !cancelled) {
             setActiveRun(latest);
+          }
+          // Sync messages periodically to show intermediate progress.
+          const now = Date.now();
+          if (now - lastSyncAt >= SYNC_INTERVAL_MS) {
+            lastSyncAt = now;
+            await syncMessages(chatId);
           }
           return;
         }
@@ -3012,7 +3095,7 @@ export function ChatShell() {
         runPollRef.current = null;
       }
     };
-  }, [activeRun, currentChatId, loadChatFromDb]);
+  }, [activeRun, addArtifact, currentChatId, loadChatFromDb]);
 
   // ── Connection manager: visibility, online/offline, and cross-tab sync ──
   const { isOnline, isVisible } = useConnectionManager({
@@ -3460,12 +3543,12 @@ export function ChatShell() {
   const checkAgentNow = useCallback(() => {
     if (runPollRef.current) {
       runPollRef.current.forceNow();
-      return;
     }
     const chatId = currentChatIdRef.current;
     if (!chatId) return;
-    if (isTyping || activeRun || isReconnecting) return;
-    void loadChatFromDb(chatId);
+    if (!runPollRef.current && !isTyping && !activeRun && !isReconnecting) {
+      void loadChatFromDb(chatId);
+    }
   }, [activeRun, isReconnecting, isTyping, loadChatFromDb]);
 
   const setMessagesScrollEl = useCallback(
@@ -6462,7 +6545,7 @@ export function ChatShell() {
                               <div className="text-[11px] text-zinc-500 dark:text-zinc-400">
                                 {visibleConnectionBannerMode === "reconnecting"
                                   ? "Reconnecting… (live updates paused)"
-                                  : "Agent is running…"}
+                                  : "Agent is running in the background…"}
                               </div>
                               {shouldShowBannerActions ? (
                                 <div className="mt-1 flex items-center gap-3">

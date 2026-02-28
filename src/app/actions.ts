@@ -5,7 +5,6 @@ import { ProjectContext, type ProjectMode } from "@/types";
 import { AgentCoordinator } from "@/lib/agent/coordinator";
 import { buildSourcePolicySettings } from "@/lib/agent/source-policy";
 import { getMcpServerConfigs } from "@/lib/mcp/config";
-import { getDefaultMcpEnabledServers } from "@/lib/mcp/defaults";
 import { applyFirecrawlTokenToMcpServers } from "@/lib/mcp/firecrawl";
 import { listUserMcpServers } from "@/lib/mcp/user-servers";
 import type { McpRuntimeServerConfig } from "@/lib/mcp/runtime";
@@ -24,37 +23,6 @@ function parsePositiveIntEnv(...varNames: string[]): number | undefined {
         return n;
     }
     return undefined;
-}
-
-function normalizeServerIds(value: unknown): string[] {
-    if (!Array.isArray(value)) return [];
-    return value
-        .filter((item): item is string => typeof item === "string")
-        .map((item) => item.trim())
-        .filter(Boolean);
-}
-
-function readMcpExplicitFlag(rawMcp: Record<string, unknown> | null): boolean {
-    if (!rawMcp) return false;
-    return rawMcp.explicit === true;
-}
-
-function readMcpEnabledServers(
-    prefs: Record<string, unknown>,
-    availableServerIds?: string[]
-): { enabledServers: string[]; hasExplicitConfig: boolean } {
-    const rawMcp = typeof prefs.mcp === "object" && prefs.mcp !== null
-        ? (prefs.mcp as Record<string, unknown>)
-        : null;
-    const hasAvailableList = Array.isArray(availableServerIds);
-    const available = new Set(normalizeServerIds(availableServerIds));
-    const explicit = readMcpExplicitFlag(rawMcp);
-    const hasExplicitConfig = explicit;
-    const enabled = explicit
-        ? normalizeServerIds(rawMcp?.enabled_servers)
-        : getDefaultMcpEnabledServers(availableServerIds);
-    const filtered = hasAvailableList ? enabled.filter((id) => available.has(id)) : enabled;
-    return { enabledServers: filtered, hasExplicitConfig };
 }
 
 export interface ChatResponse {
@@ -184,17 +152,10 @@ export async function submitUserMessage(
                 userServerId: row.id,
             }));
             const combined = [...envServers, ...userServers];
-            const availableIds = combined.map((server) => server.id);
-            const resolvedPrefs = userPrefs ?? {};
-            const mcpPref = readMcpEnabledServers(resolvedPrefs, availableIds);
-            mcpEnabledServers = mcpPref.enabledServers;
-            const enabledSet = new Set(mcpEnabledServers ?? []);
-            const filtered = enabledSet.size > 0
-                ? combined.filter((server) => enabledSet.has(server.id))
-                : [];
-            if (filtered.length > 0) {
-                mcpServers = filtered;
+            if (combined.length > 0) {
+                mcpServers = combined;
             }
+            mcpEnabledServers = combined.map((server) => server.id);
         } catch (error) {
             console.error("Failed to load MCP servers:", error);
         }

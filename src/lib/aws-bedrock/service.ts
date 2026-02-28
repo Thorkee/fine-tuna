@@ -168,7 +168,7 @@ function buildConversation(
   const conversation: BedrockMessage[] = [];
   // Bedrock tool protocol expects toolResult blocks for a prior assistant tool_use
   // turn to be supplied together in the next user message content.
-  let pendingToolResults: BedrockMessage['content'] = [];
+  let pendingToolResults: NonNullable<BedrockMessage['content']> = [];
 
   const mapToolName = (name: string): string => {
     if (!mappings) return toSafeToolName(name);
@@ -393,12 +393,25 @@ export class BedrockLlmService {
 
   private getClient(): BedrockRuntimeClient {
     if (!this.client) {
-      const loginCreds = this.resolveLoginCacheCredentials();
       const clientOpts: ConstructorParameters<typeof BedrockRuntimeClient>[0] = {
         region: this.getRegion(),
       };
-      if (loginCreds) {
-        clientOpts.credentials = loginCreds;
+      const hasStaticKeys =
+        (process.env.AWS_ACCESS_KEY_ID || '').trim() &&
+        (process.env.AWS_SECRET_ACCESS_KEY || '').trim();
+      if (hasStaticKeys) {
+        clientOpts.credentials = {
+          accessKeyId: process.env.AWS_ACCESS_KEY_ID!.trim(),
+          secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY!.trim(),
+          ...(process.env.AWS_SESSION_TOKEN?.trim()
+            ? { sessionToken: process.env.AWS_SESSION_TOKEN.trim() }
+            : {}),
+        };
+      } else {
+        const loginCreds = this.resolveLoginCacheCredentials();
+        if (loginCreds) {
+          clientOpts.credentials = loginCreds;
+        }
       }
       this.client = new BedrockRuntimeClient(clientOpts);
     }
@@ -427,7 +440,19 @@ export class BedrockLlmService {
     } catch (err) {
       if (this.isExpiredTokenError(err)) {
         this.resetClient();
-        return fn();
+        try {
+          return await fn();
+        } catch (retryErr) {
+          if (this.isExpiredTokenError(retryErr)) {
+            throw new Error(
+              'AWS credentials are missing or expired. ' +
+              'Please refresh your session (e.g. run `aws login` or ' +
+              '`aws configure export-credentials --format env-no-export`) ' +
+              'and restart the application.'
+            );
+          }
+          throw retryErr;
+        }
       }
       throw err;
     }

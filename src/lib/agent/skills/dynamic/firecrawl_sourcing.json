@@ -9,13 +9,7 @@
     "upsert_artifact",
     "mcp_tools",
     "web_search",
-    "web_fetch",
-    "mcp.firecrawl-mcp.firecrawl_search",
-    "mcp.firecrawl-mcp.firecrawl_scrape",
-    "mcp.firecrawl-mcp.firecrawl_extract",
-    "mcp.firecrawl-mcp.firecrawl_map",
-    "mcp.firecrawl-mcp.firecrawl_crawl",
-    "mcp.firecrawl-mcp.firecrawl_agent"
+    "web_fetch"
   ],
   "suggestedArtifacts": [
     "dataset",

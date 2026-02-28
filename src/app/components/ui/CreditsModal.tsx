@@ -20,7 +20,6 @@ import {
 import { useRouter } from "next/navigation";
 
 import { cn } from "@/lib/utils";
-import { getDefaultMcpEnabledServers } from "@/lib/mcp/defaults";
 import { createClient } from "@/lib/supabase/client";
 import { useProjectStore } from "@/lib/store";
 import type { ProjectMode } from "@/types";
@@ -121,41 +120,6 @@ function parseCreditSummary(value: unknown): { base: number; daily: number; tota
 function normalizePrefString(value: string): string | null {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
-}
-
-function toStringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .filter((item): item is string => typeof item === "string")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-function readMcpExplicitFlag(rawMcp: Record<string, unknown> | null): boolean {
-  if (!rawMcp) return false;
-  return rawMcp.explicit === true;
-}
-
-function isSameServerSet(a: string[], b: string[]): boolean {
-  if (a.length !== b.length) return false;
-  const setA = new Set(a);
-  for (const id of b) {
-    if (!setA.has(id)) return false;
-  }
-  return true;
-}
-
-function readMcpEnabledServers(
-  prefs: Record<string, unknown>
-): { enabledServers: string[]; hasExplicitConfig: boolean } {
-  const rawMcp = isRecord(prefs.mcp) ? (prefs.mcp as Record<string, unknown>) : null;
-  const explicit = readMcpExplicitFlag(rawMcp);
-  const hasExplicitConfig = explicit;
-  if (!explicit) {
-    return { enabledServers: getDefaultMcpEnabledServers(), hasExplicitConfig };
-  }
-  const enabled = rawMcp ? toStringArray(rawMcp.enabled_servers) : [];
-  return { enabledServers: enabled, hasExplicitConfig };
 }
 
 function formatCredits(value: number): string {
@@ -439,7 +403,6 @@ export default function CreditsModal(props: {
   const [settingsEmailUpdates, setSettingsEmailUpdates] = useState(true);
   const [settingsQueuedTasks, setSettingsQueuedTasks] = useState(true);
   const [mcpServers, setMcpServers] = useState<McpServerSummary[]>([]);
-  const [mcpEnabledServers, setMcpEnabledServers] = useState<string[]>([]);
   const [mcpLoading, setMcpLoading] = useState(false);
   const [mcpError, setMcpError] = useState<string | null>(null);
   const [mcpFormLabel, setMcpFormLabel] = useState("");
@@ -452,8 +415,6 @@ export default function CreditsModal(props: {
   const [mcpDeletingId, setMcpDeletingId] = useState<string | null>(null);
   const [mcpServersExpanded, setMcpServersExpanded] = useState(false);
   const [mcpModalOpen, setMcpModalOpen] = useState(false);
-  const [mcpExplicit, setMcpExplicit] = useState(false);
-  const availableMcpIds = useMemo(() => new Set(mcpServers.map((server) => server.id)), [mcpServers]);
   const [huggingFaceToken, setHuggingFaceToken] = useState("");
   const [githubToken, setGithubToken] = useState("");
   const [kaggleToken, setKaggleToken] = useState("");
@@ -583,10 +544,6 @@ export default function CreditsModal(props: {
         setOccupation(typeof prefs.occupation === "string" ? prefs.occupation : "");
         setAbout(typeof prefs.about === "string" ? prefs.about : "");
         setInstructions(typeof prefs.instructions === "string" ? prefs.instructions : "");
-        const mcpPref = readMcpEnabledServers(prefs);
-        setMcpEnabledServers(mcpPref.enabledServers);
-        const rawMcp = isRecord(prefs.mcp) ? (prefs.mcp as Record<string, unknown>) : null;
-        setMcpExplicit(readMcpExplicitFlag(rawMcp));
         const prefMode = parseProjectMode(prefs.default_mode);
         if (prefMode) {
           setDefaultMode(prefMode);
@@ -616,13 +573,7 @@ export default function CreditsModal(props: {
         setHasGithubToken(ghStatus);
         setHasKaggleToken(kgStatus);
         setHasFirecrawlToken(firecrawlStatus);
-        const servers = await refreshMcpServers();
-        if (!mcpPref.hasExplicitConfig && servers.length > 0) {
-          const fallback = getDefaultMcpEnabledServers(servers.map((server) => server.id));
-          if (!isSameServerSet(fallback, mcpPref.enabledServers)) {
-            setMcpEnabledServers(fallback);
-          }
-        }
+        await refreshMcpServers();
         setGithubReposLoading(true);
         try {
           const response = await fetch("/api/integrations/github/repos", { method: "GET" });
@@ -648,8 +599,6 @@ export default function CreditsModal(props: {
         setHasFirecrawlToken(false);
         setHuggingFaceSkills(DEFAULT_HF_SKILLS);
         setMcpServers([]);
-        setMcpEnabledServers([]);
-        setMcpExplicit(false);
         setMcpError(null);
         setMcpLoading(false);
         setGithubRepoConnections([]);
@@ -718,13 +667,6 @@ export default function CreditsModal(props: {
 
   const buildPreferences = useCallback(
     () => {
-      const normalizedMcpServers = Array.from(
-        new Set(mcpEnabledServers.map((id) => id.trim()).filter(Boolean))
-      );
-      const filteredMcpServers =
-        availableMcpIds.size > 0
-          ? normalizedMcpServers.filter((id) => availableMcpIds.has(id))
-          : normalizedMcpServers;
       return {
         ...basePreferences,
         nickname: normalizePrefString(nickname),
@@ -740,8 +682,6 @@ export default function CreditsModal(props: {
         },
         mcp: {
           ...(isRecord(basePreferences.mcp) ? basePreferences.mcp : {}),
-          enabled_servers: filteredMcpServers,
-          explicit: mcpExplicit,
         },
         comm: {
           ...(isRecord(basePreferences.comm) ? basePreferences.comm : {}),
@@ -756,9 +696,6 @@ export default function CreditsModal(props: {
       defaultMode,
       huggingFaceSkills,
       instructions,
-      availableMcpIds,
-      mcpEnabledServers,
-      mcpExplicit,
       nickname,
       occupation,
       settingsEmailUpdates,
@@ -767,11 +704,6 @@ export default function CreditsModal(props: {
   );
 
   const buildSkillsPreferences = useCallback(() => {
-    const normalizedMcpServers = Array.from(new Set(mcpEnabledServers.map((id) => id.trim()).filter(Boolean)));
-    const filteredMcpServers =
-      availableMcpIds.size > 0
-        ? normalizedMcpServers.filter((id) => availableMcpIds.has(id))
-        : normalizedMcpServers;
     return {
       ...basePreferences,
       skills: {
@@ -782,11 +714,9 @@ export default function CreditsModal(props: {
       },
       mcp: {
         ...(isRecord(basePreferences.mcp) ? basePreferences.mcp : {}),
-        enabled_servers: filteredMcpServers,
-        explicit: mcpExplicit,
       },
     };
-  }, [availableMcpIds, basePreferences, huggingFaceSkills, mcpEnabledServers, mcpExplicit]);
+  }, [basePreferences, huggingFaceSkills]);
 
   const saveProfile = useCallback(async () => {
     if (!userId) return;
@@ -879,18 +809,6 @@ export default function CreditsModal(props: {
     setMcpFormError(null);
   }, []);
 
-  const toggleMcpServer = useCallback((serverId: string) => {
-    const normalized = serverId.trim();
-    if (!normalized) return;
-    setMcpExplicit(true);
-    setMcpEnabledServers((prev) =>
-      prev.includes(normalized)
-        ? prev.filter((id) => id !== normalized)
-        : [...prev, normalized]
-    );
-    setSkillsAutosaveNonce((prev) => prev + 1);
-  }, []);
-
   const submitMcpServer = useCallback(async () => {
     if (!userId) return;
     const label = mcpFormLabel.trim();
@@ -964,9 +882,7 @@ export default function CreditsModal(props: {
               : `Failed to delete MCP server (${response.status})`;
           throw new Error(message);
         }
-        setMcpExplicit(true);
-        setMcpEnabledServers((prev) => prev.filter((id) => id !== normalized));
-        setSkillsAutosaveNonce((prev) => prev + 1);
+        setMcpFormNotice("Server removed.");
         await refreshMcpServers();
       } catch (error) {
         const message = error instanceof Error ? error.message : "Failed to delete MCP server.";
@@ -2138,85 +2054,62 @@ export default function CreditsModal(props: {
                               </div>
                             ) : mcpServers.length === 0 ? (
                               <div className={cn("text-xs", isDark ? "text-white/50" : "text-black/50")}>
-                                No MCP servers are configured for this workspace.
+                                No MCP servers configured yet. Add a server to get started.
                               </div>
                             ) : (
                               <div className="space-y-3">
                                 {mcpServers.map((server) => {
-                                  const enabled = mcpEnabledServers.includes(server.id);
                                   const isUserServer = server.origin === "user";
                                   const isFirecrawl = server.id === "firecrawl-mcp";
                                   const displayLabel = isFirecrawl ? "Firecrawl MCP" : server.label;
-                                  const detailParts = isFirecrawl
-                                    ? [server.toolCount !== undefined ? `${server.toolCount} tools` : null].filter(
-                                        Boolean
-                                      )
-                                    : [
-                                        server.transport === "stdio" ? "Local (stdio)" : "Remote (HTTP)",
-                                        isUserServer ? "User" : "Managed",
-                                        server.toolCount !== undefined ? `${server.toolCount} tools` : `id: ${server.id}`,
-                                      ];
+                                  const detailParts = [
+                                    server.transport === "stdio" ? "Local (stdio)" : "Remote (HTTP)",
+                                    isUserServer ? "User-added" : "Managed",
+                                    server.toolCount !== undefined ? `${server.toolCount} tools` : null,
+                                  ].filter(Boolean);
                                   return (
-                                    <div key={server.id} className="flex items-center justify-between gap-4">
-                                      <div>
+                                    <div
+                                      key={server.id}
+                                      className={cn(
+                                        "flex items-center justify-between gap-4 rounded-xl border px-3 py-2.5",
+                                        isDark ? "border-white/5 bg-white/[0.02]" : "border-black/5 bg-black/[0.01]"
+                                      )}
+                                    >
+                                      <div className="min-w-0 flex-1">
                                         <div className="flex flex-wrap items-center gap-2">
-                                          <div className="text-sm font-medium">{displayLabel}</div>
-                                          {isFirecrawl ? (
-                                            <span
-                                              className={cn(
-                                                "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
-                                                isDark
-                                                  ? "bg-emerald-500/20 text-emerald-200"
-                                                  : "bg-emerald-100 text-emerald-700"
-                                              )}
-                                            >
-                                              Default
-                                            </span>
-                                          ) : null}
+                                          <div className="text-sm font-medium truncate">{displayLabel}</div>
+                                          <span
+                                            className={cn(
+                                              "rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                                              isDark
+                                                ? "bg-emerald-500/20 text-emerald-200"
+                                                : "bg-emerald-100 text-emerald-700"
+                                            )}
+                                          >
+                                            Active
+                                          </span>
                                         </div>
                                         {detailParts.length ? (
-                                          <div className={cn("mt-0.5 text-xs", isDark ? "text-white/50" : "text-black/50")}>
+                                          <div className={cn("mt-0.5 text-xs", isDark ? "text-white/40" : "text-black/40")}>
                                             {detailParts.join(" · ")}
                                           </div>
                                         ) : null}
                                       </div>
-                                      <div className="flex items-center gap-2">
-                                        {isUserServer ? (
-                                          <button
-                                            type="button"
-                                            onClick={() => deleteMcpServer(server.id)}
-                                            disabled={!canManageSkills || mcpDeletingId === server.id}
-                                            className={cn(
-                                              "rounded-full px-3 py-1.5 text-[11px] font-semibold transition-opacity disabled:opacity-60",
-                                              isDark
-                                                ? "bg-white/10 text-white hover:bg-white/20"
-                                                : "bg-black/5 text-black hover:bg-black/10"
-                                            )}
-                                          >
-                                            {mcpDeletingId === server.id ? "Removing..." : "Delete"}
-                                          </button>
-                                        ) : null}
+                                      {isUserServer ? (
                                         <button
                                           type="button"
-                                          onClick={() => toggleMcpServer(server.id)}
-                                          disabled={!canManageSkills}
+                                          onClick={() => deleteMcpServer(server.id)}
+                                          disabled={!canManageSkills || mcpDeletingId === server.id}
                                           className={cn(
-                                            "h-5 w-9 rounded-full transition-colors disabled:opacity-60",
-                                            enabled
-                                              ? "bg-emerald-500"
-                                              : isDark
-                                                ? "bg-white/10"
-                                                : "bg-black/10"
+                                            "shrink-0 rounded-full px-3 py-1.5 text-[11px] font-semibold transition-opacity disabled:opacity-60",
+                                            isDark
+                                              ? "bg-white/10 text-white hover:bg-white/20"
+                                              : "bg-black/5 text-black hover:bg-black/10"
                                           )}
                                         >
-                                          <span
-                                            className={cn(
-                                              "block h-4 w-4 rounded-full bg-white transition-transform",
-                                              enabled ? "translate-x-4" : "translate-x-1"
-                                            )}
-                                          />
+                                          {mcpDeletingId === server.id ? "Removing..." : "Remove"}
                                         </button>
-                                      </div>
+                                      ) : null}
                                     </div>
                                   );
                                 })}

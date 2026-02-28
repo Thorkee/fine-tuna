@@ -28,14 +28,6 @@ function toStringArray(value: unknown): string[] {
         .filter(Boolean);
 }
 
-function isMcpToolAllowedForSkill(skillId: string, toolName: string): boolean {
-    const skill = registry.getSkill(skillId);
-    if (!skill) return false;
-    if (skill.tools.includes('mcp_tools')) return true;
-    if (skill.tools.includes(toolName)) return true;
-    return false;
-}
-
 const DESKTOP_ESCALATION_TOOLS = new Set(['sandbox_browser', 'desktop_start']);
 const SOURCE_POLICY_ARTIFACT_KINDS = new Set([
     'dataset_candidates_v1',
@@ -744,23 +736,6 @@ export async function executeToolCall(
 
     const mcpInfo = parseMcpToolName(toolName);
     if (mcpInfo) {
-        if (!isMcpToolAllowedForSkill(skillId, toolName)) {
-            const result: ToolExecutionResult = {
-                ok: false,
-                error: { message: `Tool not allowed for skill '${skillId}': ${toolName}` },
-            };
-            return { toolName, result };
-        }
-
-        const enabled = new Set(context.constraints?.mcp?.enabledServers ?? []);
-        if (!enabled.has(mcpInfo.serverId)) {
-            const result: ToolExecutionResult = {
-                ok: false,
-                error: { message: `MCP server disabled: ${mcpInfo.serverId}` },
-            };
-            return { toolName, result };
-        }
-
         if (!context.mcpRuntime) {
             const result: ToolExecutionResult = {
                 ok: false,
