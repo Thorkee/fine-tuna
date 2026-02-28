@@ -1348,7 +1348,7 @@ export const trainingSubmitTool: Tool = {
     definition: {
         name: 'training_submit',
         description:
-            'Submit a long-running training job (input + Python script). Returns a taskId; poll with `training_status` and fetch outputs with `training_download`.\n\nArgs:\n- input: InputRef (required)\n- script: InputRef (required; treated as a .py file)\n- extraInputs?: InputRef[] (optional)\n- hfModels?: HfPrefetchRef[] (optional)\n- hfDatasets?: HfPrefetchRef[] (optional)\n- github?: GithubPrefetchRef[] (optional)\n- kaggleDatasets?: KaggleDatasetPrefetchRef[] (optional)\n- backend?: "e2b" | "sagemaker" (optional; default "e2b")\n- sagemaker?: SageMakerExecutionRef (optional metadata/contract fields)\n- wandb?: WandbTrackingRef (optional tracking metadata)\n- expectedOutputName?: string (optional, default "model.pkl")\n- timeoutSeconds?: number (optional)\n\nInputRef shape:\n{ name?: string, url?: string, storagePath?: string, bucket?: "uploads"|"artifacts", text?: string, base64?: string, mimeType?: string }\nEach InputRef must include at least one of: url | storagePath | text | base64.\n\nHfPrefetchRef shape:\n{ repo: string, revision?: string, allowPatterns?: string[], ignorePatterns?: string[] }\n\nGithubPrefetchRef shape:\n{ repo: "owner/repo", ref?: string, subdir?: string, includePaths?: string[], excludePaths?: string[] }\n\nKaggleDatasetPrefetchRef shape:\n{ dataset: "owner/dataset", targetDir?: string, unzip?: boolean }\n\nSageMakerExecutionRef shape:\n{ trainingJobName?: string, executionRoleArn?: string, imageUri?: string, instanceType?: string, instanceCount?: number, volumeSizeGb?: number, maxRuntimeSeconds?: number, outputS3Uri?: string, hyperparameters?: Record<string, string> }\n\nWandbTrackingRef shape:\n{ project?: string, entity?: string, runName?: string, tags?: string[], notes?: string, mode?: "online"|"offline"|"disabled", config?: Record<string, unknown> }\n\nMinimal example:\n{ "input": { "name": "input.csv", "text": "x,y\\n1,2\\n" }, "script": { "name": "train.py", "text": "print(\\"hello\\")\\n" }, "backend": "sagemaker", "sagemaker": { "instanceType": "ml.g5.2xlarge" }, "wandb": { "project": "tuna", "tags": ["hackathon"] }, "hfModels": [{ "repo": "mistralai/Mistral-7B-Instruct-v0.3" }], "expectedOutputName": "model.pkl", "timeoutSeconds": 600 }',
+            'Submit a long-running training job (input + Python script). Returns a taskId; poll with `training_status` and fetch outputs with `training_download`.\n\nArgs:\n- input: InputRef (required)\n- script: InputRef (required; treated as a .py file)\n- extraInputs?: InputRef[] (optional)\n- hfModels?: HfPrefetchRef[] (optional)\n- hfDatasets?: HfPrefetchRef[] (optional)\n- github?: GithubPrefetchRef[] (optional)\n- kaggleDatasets?: KaggleDatasetPrefetchRef[] (optional)\n- backend?: "e2b" | "sagemaker" (optional; defaults to "sagemaker" when AWS SageMaker is configured, otherwise "e2b")\n- sagemaker?: SageMakerExecutionRef (optional metadata/contract fields)\n- wandb?: WandbTrackingRef (optional tracking metadata; auto-enabled when WANDB_API_KEY is set)\n- expectedOutputName?: string (optional, default "model.pkl")\n- timeoutSeconds?: number (optional)\n\nInputRef shape:\n{ name?: string, url?: string, storagePath?: string, bucket?: "uploads"|"artifacts", text?: string, base64?: string, mimeType?: string }\nEach InputRef must include at least one of: url | storagePath | text | base64.\n\nHfPrefetchRef shape:\n{ repo: string, revision?: string, allowPatterns?: string[], ignorePatterns?: string[] }\n\nGithubPrefetchRef shape:\n{ repo: "owner/repo", ref?: string, subdir?: string, includePaths?: string[], excludePaths?: string[] }\n\nKaggleDatasetPrefetchRef shape:\n{ dataset: "owner/dataset", targetDir?: string, unzip?: boolean }\n\nSageMakerExecutionRef shape:\n{ trainingJobName?: string, executionRoleArn?: string, imageUri?: string, instanceType?: string, instanceCount?: number, volumeSizeGb?: number, maxRuntimeSeconds?: number, outputS3Uri?: string, hyperparameters?: Record<string, string> }\n\nWandbTrackingRef shape:\n{ project?: string, entity?: string, runName?: string, tags?: string[], notes?: string, mode?: "online"|"offline"|"disabled", config?: Record<string, unknown> }\n\nMinimal example:\n{ "input": { "name": "input.csv", "text": "x,y\\n1,2\\n" }, "script": { "name": "train.py", "text": "print(\\"hello\\")\\n" }, "backend": "sagemaker", "sagemaker": { "instanceType": "ml.g5.2xlarge" }, "wandb": { "project": "tuna", "tags": ["hackathon"] }, "hfModels": [{ "repo": "mistralai/Mistral-7B-Instruct-v0.3" }], "expectedOutputName": "model.pkl", "timeoutSeconds": 600 }',
         parameters: {
             type: 'object',
             properties: {
@@ -1385,7 +1385,7 @@ export const trainingSubmitTool: Tool = {
                 backend: {
                     type: 'string',
                     enum: ['e2b', 'sagemaker'],
-                    description: 'Requested training backend. `sagemaker` fields are accepted as metadata/contract even when execution falls back to runner defaults.',
+                    description: 'Requested training backend. Defaults to `sagemaker` when AWS SageMaker is configured, otherwise `e2b`. `sagemaker` fields are accepted as metadata/contract even when execution falls back to runner defaults.',
                 },
                 sagemaker: sageMakerExecutionToolSchema,
                 wandb: wandbTrackingToolSchema,
@@ -1456,9 +1456,19 @@ export const trainingSubmitTool: Tool = {
                 target_dir: item.targetDir,
                 unzip: item.unzip ?? true,
             }));
-            const requestedBackend: TrainingBackend = parsed.data.backend ?? 'e2b';
+            const requestedBackend: TrainingBackend = parsed.data.backend
+                ?? ((process.env.SAGEMAKER_EXECUTION_ROLE_ARN || '').trim() ? 'sagemaker' : 'e2b');
             const sagemakerInput: SageMakerExecutionRef | undefined = parsed.data.sagemaker;
-            const wandbInput: WandbTrackingRef | undefined = parsed.data.wandb;
+            const wandbInput: WandbTrackingRef | undefined = parsed.data.wandb
+                ?? ((() => {
+                    const hasKey = (process.env.WANDB_API_KEY || '').trim();
+                    if (!hasKey) return undefined;
+                    return {
+                        project: (process.env.WANDB_PROJECT || '').trim() || 'tuna',
+                        entity: (process.env.WANDB_ENTITY || '').trim() || undefined,
+                        mode: 'online' as const,
+                    };
+                })());
             const sagemaker = sagemakerInput
                 ? {
                     training_job_name: sagemakerInput.trainingJobName,

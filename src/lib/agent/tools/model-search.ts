@@ -5,12 +5,12 @@ import { randomUUID } from 'crypto';
 import type { AgentContext, Tool, ToolExecutionResult } from '../types';
 import {
     benchmarkSignalCount,
+    buildParallelSearchStrategy,
     buildTierAttemptTelemetry,
     buildSourceFallbackChain,
     evaluateDesktopEscalationGuard,
     extractLikelyModelId,
     getTierDomains,
-    getTierOrder,
     isBenchmarkDomain,
     modelCandidateScore,
     sourcePolicyFromConstraintConfig,
@@ -40,6 +40,12 @@ type Candidate = {
     benchmarkSignalCount: number;
     benchmarkDomainHits: number;
     freshestBenchmarkDate?: string;
+};
+
+type TierSearchResult = {
+    tier: SourceTier;
+    rows: SearchRow[];
+    error?: string;
 };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -207,6 +213,25 @@ async function exaSearch(params: {
     return { ok: true, rows: normalizeRows(data, params.maxResults) };
 }
 
+async function exaSearchForTier(params: {
+    tier: SourceTier;
+    apiKey: string;
+    query: string;
+    includeDomains: string[] | undefined;
+    maxResults: number;
+}): Promise<TierSearchResult> {
+    const result = await exaSearch({
+        apiKey: params.apiKey,
+        query: params.query,
+        includeDomains: params.includeDomains,
+        maxResults: params.maxResults,
+    });
+    if (!result.ok) {
+        return { tier: params.tier, rows: [], error: result.message };
+    }
+    return { tier: params.tier, rows: result.rows };
+}
+
 function updateFreshestDate(existing: string | undefined, candidate: string | undefined): string | undefined {
     if (!candidate) return existing;
     if (!existing) return candidate;
@@ -235,7 +260,7 @@ export const modelSearchTool: Tool = {
     definition: {
         name: 'model_search',
         description:
-            'Find and rank Mistral-family open-source models with explicit fallback order: Hugging Face first, then GitHub/Kaggle, then Exa/Firecrawl open-web discovery, then Desktop escalation for blockers. Returns scored candidates, fallback reasons, and benchmark evidence.',
+            'Find and rank Mistral-family open-source models using parallel multi-tier search: Hugging Face + GitHub/Kaggle fire concurrently, with conditional open-web fallback and benchmark enrichment. Returns scored candidates, fallback reasons, and benchmark evidence.',
         parameters: {
             type: 'object',
             properties: {
@@ -265,53 +290,47 @@ export const modelSearchTool: Tool = {
         const benchmarkTopN = parsed.data.benchmarkTopN ?? 5;
         const policy = sourcePolicyFromConstraintConfig(context.constraints?.sourcePolicy);
         const MIN_ACCEPTABLE_SCORE = 0.58;
-        const tierOrder: SourceTier[] = (() => {
-            const base: SourceTier[] = getTierOrder(policy);
-            if (!parsed.data.includeTier3) return base;
-            if (base.includes('tier3')) return base;
-            return [...base, 'tier3'];
-        })();
+        const strategy = buildParallelSearchStrategy(parsed.data.query, 'model', policy);
+
+        if (parsed.data.includeTier3 && strategy.conditionalTier !== 'tier3' && !strategy.parallelTiers.includes('tier3')) {
+            strategy.parallelTiers.push('tier3');
+            strategy.conditionalTier = null;
+        }
 
         const attempts: SourceTierAttemptTelemetry[] = [];
         const candidates = new Map<string, Candidate>();
 
-        for (const tier of tierOrder) {
-            const includeDomains = tier === 'tier3' ? undefined : getTierDomains('model', tier, policy);
-            const search = await exaSearch({
-                apiKey,
-                query: parsed.data.query,
-                includeDomains: includeDomains && includeDomains.length > 0 ? includeDomains : undefined,
-                maxResults,
-            });
-            if (!search.ok) {
-                return { ok: false, error: { name: 'ExaError', message: search.message } };
-            }
-
-            let tierBestScore: number | null = null;
-            let tierViableCandidates = 0;
-            let tierMistralResults = 0;
-            for (const row of search.rows) {
+        function ingestRows(rows: SearchRow[], tier: SourceTier): { bestScore: number | null; viableCount: number; mistralCount: number } {
+            let bestScore: number | null = null;
+            let viableCount = 0;
+            let mistralCount = 0;
+            for (const row of rows) {
                 const modelId = extractLikelyModelId(row.url) ?? row.title;
-                if (!isMistralFamilyCandidate({
-                    modelId,
-                    title: row.title,
-                    url: row.url,
-                    domain: row.domain,
-                })) {
+                if (!isMistralFamilyCandidate({ modelId, title: row.title, url: row.url, domain: row.domain })) {
                     continue;
                 }
-                tierMistralResults += 1;
-
+                mistralCount += 1;
                 const key = modelKey(row);
                 const text = `${row.highlights?.join('\n') ?? ''}\n${row.textSnippet ?? ''}`;
                 const benchmarkSignals = benchmarkSignalCount(`${row.title}\n${text}`);
                 const benchmarkDomainHits = row.domain && isBenchmarkDomain(row.domain, policy) ? 1 : 0;
-                const relevance = typeof row.score === 'number' ? Math.max(0, Math.min(1, row.score)) : 0;
-                if (tierBestScore === null || relevance > tierBestScore) {
-                    tierBestScore = relevance;
+
+                const scored = modelCandidateScore({
+                    title: row.title,
+                    url: row.url,
+                    text,
+                    score: row.score,
+                    publishedDate: row.publishedDate,
+                    benchmarkSignalCount: benchmarkSignals,
+                    benchmarkDomainHits,
+                    policy,
+                });
+
+                if (bestScore === null || scored.total > bestScore) {
+                    bestScore = scored.total;
                 }
-                if (relevance >= MIN_ACCEPTABLE_SCORE) {
-                    tierViableCandidates += 1;
+                if (scored.total >= MIN_ACCEPTABLE_SCORE) {
+                    viableCount += 1;
                 }
                 const previous = candidates.get(key);
                 if (previous && (previous.score ?? 0) >= (row.score ?? 0)) continue;
@@ -329,21 +348,101 @@ export const modelSearchTool: Tool = {
                     freshestBenchmarkDate: row.publishedDate,
                 });
             }
-
-            const attempt = buildTierAttemptTelemetry({
-                tier,
-                includeDomains: includeDomains && includeDomains.length > 0 ? includeDomains : null,
-                numResults: tierMistralResults,
-                minResultsRequired: Math.max(1, policy.minResultsPerTier),
-                viableCandidates: tierViableCandidates,
-                bestScore: tierBestScore,
-                minAcceptableScore: MIN_ACCEPTABLE_SCORE,
-                canEscalate: tier !== 'tier3',
-            });
-            attempts.push(attempt);
-            if (!attempt.escalated) break;
+            return { bestScore, viableCount, mistralCount };
         }
 
+        // Phase 1: fire parallel tier searches
+        const parallelPromises: Promise<TierSearchResult>[] = [];
+        for (const tier of strategy.parallelTiers) {
+            const includeDomains = tier === 'tier3' ? undefined : getTierDomains('model', tier, policy);
+            parallelPromises.push(
+                exaSearchForTier({
+                    tier,
+                    apiKey,
+                    query: parsed.data.query,
+                    includeDomains: includeDomains && includeDomains.length > 0 ? includeDomains : undefined,
+                    maxResults,
+                }).catch((err): TierSearchResult => ({ tier, rows: [], error: String(err) })),
+            );
+        }
+
+        const settled = await Promise.allSettled(parallelPromises);
+        const tierResults: TierSearchResult[] = settled.map(s =>
+            s.status === 'fulfilled' ? s.value : { tier: 'tier1' as SourceTier, rows: [], error: String(s.reason) },
+        );
+
+        for (const tier of strategy.parallelTiers) {
+            const result = tierResults.find(r => r.tier === tier);
+            if (!result || result.error) {
+                attempts.push(buildTierAttemptTelemetry({
+                    tier,
+                    includeDomains: null,
+                    numResults: 0,
+                    minResultsRequired: Math.max(1, policy.minResultsPerTier),
+                    viableCandidates: 0,
+                    bestScore: null,
+                    minAcceptableScore: MIN_ACCEPTABLE_SCORE,
+                    canEscalate: tier !== 'tier3',
+                }));
+                continue;
+            }
+            const { bestScore, viableCount, mistralCount } = ingestRows(result.rows, tier);
+            const includeDomains = tier === 'tier3' ? undefined : getTierDomains('model', tier, policy);
+            attempts.push(buildTierAttemptTelemetry({
+                tier,
+                includeDomains: includeDomains && includeDomains.length > 0 ? includeDomains : null,
+                numResults: mistralCount,
+                minResultsRequired: Math.max(1, policy.minResultsPerTier),
+                viableCandidates: viableCount,
+                bestScore,
+                minAcceptableScore: MIN_ACCEPTABLE_SCORE,
+                canEscalate: tier !== 'tier3',
+            }));
+        }
+
+        // Phase 2: conditional tier3 if parallel phase was insufficient
+        const totalViable = Array.from(candidates.values()).length;
+        if (strategy.conditionalTier && totalViable < Math.max(1, policy.minResultsPerTier)) {
+            const tier3Search = await exaSearchForTier({
+                tier: strategy.conditionalTier,
+                apiKey,
+                query: parsed.data.query,
+                includeDomains: undefined,
+                maxResults,
+            }).catch((err): TierSearchResult => ({ tier: strategy.conditionalTier!, rows: [], error: String(err) }));
+
+            if (tier3Search.error) {
+                attempts.push(buildTierAttemptTelemetry({
+                    tier: strategy.conditionalTier,
+                    includeDomains: null,
+                    numResults: 0,
+                    minResultsRequired: Math.max(1, policy.minResultsPerTier),
+                    viableCandidates: 0,
+                    bestScore: null,
+                    minAcceptableScore: MIN_ACCEPTABLE_SCORE,
+                    canEscalate: false,
+                }));
+            } else {
+                const { bestScore, viableCount, mistralCount } = ingestRows(tier3Search.rows, strategy.conditionalTier);
+                attempts.push(buildTierAttemptTelemetry({
+                    tier: strategy.conditionalTier,
+                    includeDomains: null,
+                    numResults: mistralCount,
+                    minResultsRequired: Math.max(1, policy.minResultsPerTier),
+                    viableCandidates: viableCount,
+                    bestScore,
+                    minAcceptableScore: MIN_ACCEPTABLE_SCORE,
+                    canEscalate: false,
+                }));
+            }
+        }
+
+        if (candidates.size === 0 && tierResults.every(r => !!r.error)) {
+            const messages = tierResults.map(r => r.error).filter(Boolean);
+            return { ok: false, error: { name: 'SearchError', message: `All search tiers failed: ${messages.join('; ')}` } };
+        }
+
+        // Benchmark enrichment phase (already parallel via Promise.all)
         const preliminary = Array.from(candidates.values())
             .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
             .slice(0, Math.max(1, benchmarkTopN));
@@ -355,8 +454,8 @@ export const modelSearchTool: Tool = {
                 query: benchmarkQuery,
                 includeDomains: policy.benchmarkDomains,
                 maxResults: 6,
-            });
-            if (!bench.ok) return;
+            }).catch(() => null);
+            if (!bench || !bench.ok) return;
             let domainHits = 0;
             let signalHits = 0;
             let freshest = candidate.freshestBenchmarkDate;
@@ -418,6 +517,10 @@ export const modelSearchTool: Tool = {
             performedAt: new Date().toISOString(),
             query: parsed.data.query,
             tierUsed,
+            searchStrategy: {
+                parallelTiers: strategy.parallelTiers,
+                conditionalTier: strategy.conditionalTier,
+            },
             policy: {
                 strictness: policy.strictness,
                 benchmarkMaxAgeDays: policy.benchmarkMaxAgeDays,
@@ -465,4 +568,3 @@ export const modelSearchTool: Tool = {
         };
     },
 };
-

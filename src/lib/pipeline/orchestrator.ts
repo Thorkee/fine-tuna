@@ -395,6 +395,7 @@ export class AgenticPipelineOrchestrator {
                 budget: budgetForModel,
                 timeline: this.state.intent.timeline.preferredDuration || '4 hours',
                 accuracyPriority: this.state.intent.quality.priority,
+                preferredFamily: 'mistral',
             },
             this.context
         );
