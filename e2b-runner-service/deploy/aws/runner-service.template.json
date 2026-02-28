@@ -1,0 +1,38 @@
+{
+  "serviceName": "tuna-runner",
+  "cluster": "${ECS_CLUSTER_ARN}",
+  "taskDefinition": "${RUNNER_TASK_DEFINITION_ARN}",
+  "desiredCount": 1,
+  "launchType": "FARGATE",
+  "platformVersion": "LATEST",
+  "enableExecuteCommand": true,
+  "propagateTags": "SERVICE",
+  "deploymentConfiguration": {
+    "maximumPercent": 200,
+    "minimumHealthyPercent": 100,
+    "deploymentCircuitBreaker": {
+      "enable": true,
+      "rollback": true
+    }
+  },
+  "healthCheckGracePeriodSeconds": 45,
+  "networkConfiguration": {
+    "awsvpcConfiguration": {
+      "subnets": ["${PRIVATE_SUBNET_1}", "${PRIVATE_SUBNET_2}"],
+      "securityGroups": ["${RUNNER_SERVICE_SECURITY_GROUP_ID}"],
+      "assignPublicIp": "DISABLED"
+    }
+  },
+  "loadBalancers": [
+    {
+      "targetGroupArn": "${RUNNER_TARGET_GROUP_ARN}",
+      "containerName": "tuna-runner",
+      "containerPort": 8000
+    }
+  ],
+  "tags": [
+    { "key": "Project", "value": "tuna" },
+    { "key": "Service", "value": "runner" },
+    { "key": "Environment", "value": "${ENVIRONMENT}" }
+  ]
+}

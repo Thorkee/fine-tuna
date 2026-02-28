@@ -1,0 +1,72 @@
+{
+  "family": "tuna-app",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "${APP_TASK_EXECUTION_ROLE_ARN}",
+  "taskRoleArn": "${APP_TASK_ROLE_ARN}",
+  "runtimePlatform": {
+    "operatingSystemFamily": "LINUX",
+    "cpuArchitecture": "X86_64"
+  },
+  "containerDefinitions": [
+    {
+      "name": "tuna-app",
+      "image": "${APP_IMAGE_URI}",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 3000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "NODE_ENV", "value": "production" },
+        { "name": "NEXT_TELEMETRY_DISABLED", "value": "1" },
+        { "name": "NEXT_PUBLIC_APP_URL", "value": "${APP_PUBLIC_BASE_URL}" },
+        { "name": "NEXT_PUBLIC_SUPABASE_URL", "value": "${NEXT_PUBLIC_SUPABASE_URL}" },
+        { "name": "NEXT_PUBLIC_SUPABASE_ANON_KEY", "value": "${NEXT_PUBLIC_SUPABASE_ANON_KEY}" },
+        { "name": "SUPABASE_STORAGE_URL", "value": "${SUPABASE_STORAGE_URL}" },
+        { "name": "SUPABASE_STORAGE_REGION", "value": "${SUPABASE_STORAGE_REGION}" },
+        { "name": "TUNA_LLM_PROVIDER", "value": "aws_bedrock" },
+        { "name": "AWS_REGION", "value": "${AWS_REGION}" },
+        { "name": "AWS_BEDROCK_MODEL_ID", "value": "${AWS_BEDROCK_MODEL_ID}" },
+        { "name": "E2B_RUNNER_URL", "value": "${E2B_RUNNER_URL}" },
+        { "name": "TUNA_AGENT_SOURCE_POLICY_STRICTNESS", "value": "${TUNA_AGENT_SOURCE_POLICY_STRICTNESS}" }
+      ],
+      "secrets": [
+        { "name": "SUPABASE_SERVICE_ROLE_KEY", "valueFrom": "${SECRET_ARN_SUPABASE_SERVICE_ROLE_KEY}" },
+        { "name": "POSTGRES_URL", "valueFrom": "${SECRET_ARN_POSTGRES_URL}" },
+        { "name": "SUPABASE_STORAGE_KEY_ID", "valueFrom": "${SECRET_ARN_SUPABASE_STORAGE_KEY_ID}" },
+        { "name": "SUPABASE_STORAGE_SECRET", "valueFrom": "${SECRET_ARN_SUPABASE_STORAGE_SECRET}" },
+        { "name": "EXA_API_KEY", "valueFrom": "${SECRET_ARN_EXA_API_KEY}" },
+        { "name": "E2B_RUNNER_TOKEN", "valueFrom": "${SECRET_ARN_E2B_RUNNER_TOKEN}" },
+        { "name": "AZURE_OPENAI_API_KEY", "valueFrom": "${SECRET_ARN_AZURE_OPENAI_API_KEY}" },
+        { "name": "AZURE_OPENAI_AUTH_TOKEN", "valueFrom": "${SECRET_ARN_AZURE_OPENAI_AUTH_TOKEN}" },
+        { "name": "OPENAI_API_KEY", "valueFrom": "${SECRET_ARN_OPENAI_API_KEY}" },
+        { "name": "STRIPE_SECRET_KEY", "valueFrom": "${SECRET_ARN_STRIPE_SECRET_KEY}" },
+        { "name": "STRIPE_WEBHOOK_SECRET", "valueFrom": "${SECRET_ARN_STRIPE_WEBHOOK_SECRET}" },
+        { "name": "RESEND_API_KEY", "valueFrom": "${SECRET_ARN_RESEND_API_KEY}" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/tuna-app",
+          "awslogs-region": "${AWS_REGION}",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "node -e \"fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 45
+      }
+    }
+  ]
+}

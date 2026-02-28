@@ -1,0 +1,18 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev
+    ports:
+      - "3000:3000"
+    environment:
+      # Improves file watching reliability on Docker Desktop for macOS.
+      CHOKIDAR_USEPOLLING: "true"
+      # Inside the container there's no Docker daemon; use the local Python installed in the image.
+      PYTHON_SANDBOX_MODE: "local"
+    volumes:
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+    command: npm run dev -- -H 0.0.0.0

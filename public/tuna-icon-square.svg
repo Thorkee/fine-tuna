@@ -1,0 +1,12 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tunaIconGradient" x1="24" y1="24" x2="232" y2="232" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#14B8A6" />
+      <stop offset="1" stop-color="#0EA5E9" />
+    </linearGradient>
+  </defs>
+  <rect x="24" y="24" width="208" height="208" rx="56" fill="url(#tunaIconGradient)" />
+  <circle cx="128" cy="128" r="60" fill="white" fill-opacity="0.94" />
+  <path d="M102 128C102 116.954 110.954 108 122 108H166V128H102Z" fill="#0F172A" fill-opacity="0.9" />
+  <path d="M102 128H166V148H122C110.954 148 102 139.046 102 128Z" fill="#0F172A" fill-opacity="0.9" />
+</svg>

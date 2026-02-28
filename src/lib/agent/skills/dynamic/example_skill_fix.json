@@ -1,0 +1,20 @@
+{
+  "id": "example_skill_fix",
+  "name": "Example Skill Fix",
+  "description": "Demonstrate correct create_skill payload shape.",
+  "systemPrompt": "You are a helper skill used to demonstrate correct payload formatting.",
+  "tools": [
+    "read_file",
+    "mcp_tools",
+    "web_search",
+    "desktop_start",
+    "desktop_action",
+    "desktop_screenshot",
+    "desktop_stop",
+    "desktop_stream_start",
+    "desktop_stream_stop"
+  ],
+  "suggestedArtifacts": [
+    "markdown"
+  ]
+}

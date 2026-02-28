@@ -1,0 +1,19 @@
+{
+  "id": "test_skill_1",
+  "name": "Test Skill 1",
+  "description": "Test",
+  "systemPrompt": "You are a test.",
+  "tools": [
+    "list_files",
+    "mcp_tools",
+    "desktop_start",
+    "desktop_action",
+    "desktop_screenshot",
+    "desktop_stop",
+    "desktop_stream_start",
+    "desktop_stream_stop"
+  ],
+  "suggestedArtifacts": [
+    "markdown"
+  ]
+}

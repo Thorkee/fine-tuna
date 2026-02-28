@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>E2B Runner — Test UI</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 680px; margin: 2rem auto; padding: 0 1rem; }
+    h1 { font-size: 1.25rem; }
+    h2 { font-size: 1rem; margin-top: 1.5rem; }
+    label { display: block; margin-top: 0.75rem; font-weight: 600; }
+    input[type="file"], input[type="url"], input[type="text"] { margin-top: 0.25rem; width: 100%; max-width: 480px; }
+    button { margin-top: 1rem; padding: 0.5rem 1rem; cursor: pointer; background: #333; color: #fff; border: none; border-radius: 6px; }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .status { margin-top: 1rem; padding: 0.75rem; background: #f5f5f5; border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
+    .status.error { background: #fee; }
+    .status.success { background: #efe; }
+    .downloads { margin-top: 0.5rem; }
+    .downloads a { display: inline-block; margin-right: 1rem; margin-bottom: 0.5rem; color: #06c; }
+    #currentStage { margin-top: 1rem; padding: 0.5rem 0.75rem; background: #e8f4fc; border-left: 4px solid #06c; font-weight: 700; font-size: 1rem; display: none; }
+    #trace { margin-top: 0.75rem; padding: 0.75rem; background: #1e1e1e; color: #d4d4d4; font-family: ui-monospace, monospace; font-size: 0.8rem; max-height: 320px; overflow-y: auto; border-radius: 6px; white-space: pre-wrap; word-break: break-all; }
+    #trace:empty { display: none; }
+    .trace-time { color: #858585; }
+    a { color: #06c; }
+  </style>
+</head>
+<body>
+  <h1>E2B Runner — Test UI</h1>
+  <p id="modeNote">Submit CSV + Python script. Script should produce <code>model.pkl</code> in the sandbox.</p>
+  <p id="localModeNote" style="display: none; background: #fff3cd; padding: 0.5rem; border-radius: 6px; margin-top: 0.5rem;"><strong>Local mode</strong> — Supabase not configured. Tasks and outputs are in-memory / local disk only.</p>
+
+  <h2>1) Multipart upload (testing)</h2>
+  <form id="form">
+    <label for="csv">CSV file</label>
+    <input type="file" id="csv" name="csv" accept=".csv" />
+    <label for="script">Python script (.py)</label>
+    <input type="file" id="script" name="script" accept=".py" />
+    <button type="submit" id="submitBtn">Submit task (upload files)</button>
+  </form>
+
+  <h2>2) Upload by reference (URLs)</h2>
+  <form id="formRef">
+    <label for="csv_url">CSV URL</label>
+    <input type="url" id="csv_url" name="csv_url" placeholder="https://..." />
+    <label for="script_url">Script URL</label>
+    <input type="url" id="script_url" name="script_url" placeholder="https://..." />
+    <button type="submit" id="submitRefBtn">Submit task (by reference)</button>
+  </form>
+
+  <div id="currentStage"></div>
+  <div id="status" class="status" style="display: none;"></div>
+  <div id="downloads" class="downloads" style="display: none;"></div>
+  <div id="trace"></div>
+
+  <script>
+    const form = document.getElementById("form");
+    const formRef = document.getElementById("formRef");
+    const statusEl = document.getElementById("status");
+    const downloadsEl = document.getElementById("downloads");
+    const stageEl = document.getElementById("currentStage");
+    const traceEl = document.getElementById("trace");
+    const submitBtn = document.getElementById("submitBtn");
+    const submitRefBtn = document.getElementById("submitRefBtn");
+    const base = "";
+    const MAX_TRACE_LINES = 80;
+
+    (async function showMode() {
+      try {
+        const r = await fetch(base + "/config");
+        const c = await r.json();
+        if (c && !c.supabase_configured) document.getElementById("localModeNote").style.display = "block";
+      } catch (_) {}
+    })();
+
+    function ts() {
+      return new Date().toISOString().slice(11, 23);
+    }
+
+    function setStage(text) {
+      stageEl.style.display = "block";
+      stageEl.textContent = "Stage: " + text;
+    }
+
+    function trace(msg) {
+      const line = "[" + ts() + "] " + msg;
+      traceEl.style.display = "block";
+      traceEl.appendChild(document.createTextNode(line + "\n"));
+      const lines = traceEl.childNodes.length;
+      if (lines > MAX_TRACE_LINES) {
+        const toRemove = lines - MAX_TRACE_LINES;
+        for (let i = 0; i < toRemove; i++) traceEl.removeChild(traceEl.firstChild);
+      }
+      traceEl.scrollTop = traceEl.scrollHeight;
+    }
+
+    function showStatus(text, isError) {
+      statusEl.style.display = "block";
+      statusEl.textContent = text;
+      statusEl.classList.toggle("error", !!isError);
+      statusEl.classList.toggle("success", !isError);
+    }
+
+    function showDownloads(taskId, status) {
+      downloadsEl.style.display = "block";
+      const baseUrl = base + "/tasks/" + taskId;
+      let html = "";
+      if (status === "completed") {
+        html += '<a href="' + baseUrl + '/download?file=model" download>Download model</a>';
+        html += '<a href="' + baseUrl + '/output">Download model (alt)</a>';
+      }
+      html += '<a href="' + baseUrl + '/download?file=log" download>Download run.log</a>';
+      if (status === "completed") {
+        html += '<a href="' + baseUrl + '/download?file=metadata">View metadata</a>';
+      }
+      downloadsEl.innerHTML = html;
+    }
+
+    async function pollStatus(taskId) {
+      let pollCount = 0;
+      const interval = setInterval(async () => {
+        pollCount++;
+        setStage("Polling status (attempt " + pollCount + ")");
+        trace("GET /tasks/" + taskId + "/status");
+        try {
+          const r = await fetch(base + "/tasks/" + taskId + "/status");
+          const data = await r.json();
+          if (!r.ok) {
+            trace("ERROR status: " + (data.detail || r.statusText));
+            showStatus("Status failed: " + (data.detail || r.statusText), true);
+            clearInterval(interval);
+            submitBtn.disabled = false;
+            submitRefBtn.disabled = false;
+            setStage("Failed — status request error");
+            return;
+          }
+          const status = data.status;
+          trace("Status: " + status + (data.error_message ? " — " + data.error_message.slice(0, 100) : ""));
+          showStatus("Task ID: " + taskId + "\nStatus: " + status + (data.error_message ? "\nError: " + data.error_message : ""), status === "failed");
+          showDownloads(taskId, status);
+          if (status === "completed") {
+            setStage("Completed — ready to download");
+            trace("Task completed. Download links above.");
+            clearInterval(interval);
+            submitBtn.disabled = false;
+            submitRefBtn.disabled = false;
+            return;
+          }
+          if (status === "failed") {
+            setStage("Failed — see error above");
+            trace("Task failed.");
+            clearInterval(interval);
+            submitBtn.disabled = false;
+            submitRefBtn.disabled = false;
+            return;
+          }
+          if (status === "running") setStage("Running — E2B sandbox executing");
+          else if (status === "pending") setStage("Pending — job queued");
+        } catch (err) {
+          trace("ERROR poll: " + err.message);
+          showStatus("Poll failed: " + err.message, true);
+          clearInterval(interval);
+          submitBtn.disabled = false;
+          submitRefBtn.disabled = false;
+          setStage("Failed — poll error");
+        }
+      }, 2000);
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const csvInput = document.getElementById("csv");
+      const scriptInput = document.getElementById("script");
+      if (!csvInput.files?.length || !scriptInput.files?.length) {
+        showStatus("Please select both CSV and script files.", true);
+        trace("Aborted: missing files");
+        return;
+      }
+      submitBtn.disabled = true;
+      submitRefBtn.disabled = true;
+      trace("——— New run (multipart) ———");
+      setStage("Preparing upload…");
+      trace("Selected CSV: " + csvInput.files[0].name + ", script: " + scriptInput.files[0].name);
+      const fd = new FormData();
+      fd.append("csv", csvInput.files[0]);
+      fd.append("script", scriptInput.files[0]);
+      setStage("Uploading files to server…");
+      trace("POST /tasks (multipart)");
+      try {
+        const r = await fetch(base + "/tasks", { method: "POST", body: fd });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          trace("ERROR " + r.status + ": " + (data.detail || r.statusText));
+          showStatus("Submit failed: " + (data.detail || r.statusText), true);
+          submitBtn.disabled = false;
+          submitRefBtn.disabled = false;
+          setStage("Failed — submit error");
+          return;
+        }
+        const taskId = data.task_id;
+        trace("Task created: " + taskId);
+        setStage("Task created — polling status…");
+        showStatus("Task ID: " + taskId + "\nPolling status…", false);
+        pollStatus(taskId);
+      } catch (err) {
+        trace("ERROR: " + err.message);
+        showStatus("Request failed: " + err.message, true);
+        submitBtn.disabled = false;
+        submitRefBtn.disabled = false;
+        setStage("Failed — network error");
+      }
+    });
+
+    formRef.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      const csvUrl = document.getElementById("csv_url").value.trim();
+      const scriptUrl = document.getElementById("script_url").value.trim();
+      if (!csvUrl || !scriptUrl) {
+        showStatus("Please enter both CSV URL and Script URL.", true);
+        trace("Aborted: missing URLs");
+        return;
+      }
+      submitRefBtn.disabled = true;
+      submitBtn.disabled = true;
+      trace("——— New run (by reference) ———");
+      setStage("Submitting by reference…");
+      trace("POST /tasks/by-reference (csv_url, script_url)");
+      try {
+        const r = await fetch(base + "/tasks/by-reference", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ csv_url: csvUrl, script_url: scriptUrl }),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok) {
+          trace("ERROR " + r.status + ": " + (data.detail || r.statusText));
+          showStatus("Submit failed: " + (data.detail || r.statusText), true);
+          submitRefBtn.disabled = false;
+          submitBtn.disabled = false;
+          setStage("Failed — submit error");
+          return;
+        }
+        const taskId = data.task_id;
+        trace("Task created: " + taskId);
+        setStage("Task created — polling status…");
+        showStatus("Task ID: " + taskId + "\nPolling status…", false);
+        pollStatus(taskId);
+      } catch (err) {
+        trace("ERROR: " + err.message);
+        showStatus("Request failed: " + err.message, true);
+        submitRefBtn.disabled = false;
+        submitBtn.disabled = false;
+        setStage("Failed — network error");
+      }
+    });
+  </script>
+</body>
+</html>

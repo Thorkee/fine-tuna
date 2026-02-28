@@ -1,0 +1,20 @@
+{
+  "id": "tool_smoke_test_skill",
+  "name": "Tool Smoke Test Skill",
+  "description": "Temporary skill created to validate create_skill tool call path.",
+  "systemPrompt": "You are a temporary skill used to validate that skill creation works. Keep responses short and factual.",
+  "tools": [
+    "list_files",
+    "read_file",
+    "mcp_tools",
+    "desktop_start",
+    "desktop_action",
+    "desktop_screenshot",
+    "desktop_stop",
+    "desktop_stream_start",
+    "desktop_stream_stop"
+  ],
+  "suggestedArtifacts": [
+    "markdown"
+  ]
+}

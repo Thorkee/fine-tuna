@@ -1,0 +1,10 @@
+# Local data and env
+data/
+.venv/
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pkl

@@ -1,0 +1,25 @@
+{
+  "id": "report_writer",
+  "name": "Report Writer",
+  "description": "Drafts and manages structured reports and documents, including DOCX import/export.",
+  "systemPrompt": "You are the Report Writer skill. Create, update, and refine document artifacts (reports, summaries, briefs). Use upsert_document_html to publish content, import_docx to ingest user files, and export_docx to provide downloads. Keep formatting clean and professional. If you need to show the user the document, open the artifact.",
+  "tools": [
+    "update_plan_step",
+    "open_artifact",
+    "upsert_artifact",
+    "mcp_tools",
+    "upsert_document_html",
+    "import_docx",
+    "export_docx",
+    "desktop_start",
+    "desktop_action",
+    "desktop_screenshot",
+    "desktop_stop",
+    "desktop_stream_start",
+    "desktop_stream_stop"
+  ],
+  "suggestedArtifacts": [
+    "document",
+    "markdown"
+  ]
+}

@@ -1,0 +1,13 @@
+<svg width="640" height="160" viewBox="0 0 640 160" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="tunaLogoGradient" x1="0" y1="0" x2="640" y2="160" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#14B8A6" />
+      <stop offset="1" stop-color="#0EA5E9" />
+    </linearGradient>
+  </defs>
+  <rect x="10" y="10" width="620" height="140" rx="36" fill="url(#tunaLogoGradient)" />
+  <circle cx="96" cy="80" r="30" fill="white" fill-opacity="0.92" />
+  <path d="M84 80C84 73.3726 89.3726 68 96 68H118V80H84Z" fill="#0F172A" fill-opacity="0.88" />
+  <path d="M84 80H118V92H96C89.3726 92 84 86.6274 84 80Z" fill="#0F172A" fill-opacity="0.88" />
+  <text x="154" y="103" fill="white" font-family="Inter, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif" font-size="72" font-weight="700" letter-spacing="2">tuna</text>
+</svg>

@@ -1,0 +1,26 @@
+{
+  "id": "spreadsheet_analyst",
+  "name": "Spreadsheet Analyst",
+  "description": "Builds, analyzes, and exports spreadsheets with formulas and multi-sheet data.",
+  "systemPrompt": "You are the Spreadsheet Analyst skill. Build or update spreadsheet artifacts from tabular data, read ranges for analysis, and export XLSX when requested. Use create_spreadsheet_from_table to construct sheets, import_xlsx to ingest user files, read_range to inspect data, and export_xlsx for downloads. Keep sheet names clear and add headers when possible.",
+  "tools": [
+    "update_plan_step",
+    "open_artifact",
+    "upsert_artifact",
+    "mcp_tools",
+    "create_spreadsheet_from_table",
+    "import_xlsx",
+    "read_range",
+    "export_xlsx",
+    "desktop_start",
+    "desktop_action",
+    "desktop_screenshot",
+    "desktop_stop",
+    "desktop_stream_start",
+    "desktop_stream_stop"
+  ],
+  "suggestedArtifacts": [
+    "spreadsheet",
+    "dataset"
+  ]
+}

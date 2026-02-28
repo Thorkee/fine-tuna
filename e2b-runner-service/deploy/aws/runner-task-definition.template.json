@@ -1,0 +1,72 @@
+{
+  "family": "tuna-runner",
+  "networkMode": "awsvpc",
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "1024",
+  "memory": "2048",
+  "executionRoleArn": "${RUNNER_TASK_EXECUTION_ROLE_ARN}",
+  "taskRoleArn": "${RUNNER_TASK_ROLE_ARN}",
+  "runtimePlatform": {
+    "operatingSystemFamily": "LINUX",
+    "cpuArchitecture": "X86_64"
+  },
+  "containerDefinitions": [
+    {
+      "name": "tuna-runner",
+      "image": "${RUNNER_IMAGE_URI}",
+      "essential": true,
+      "portMappings": [
+        {
+          "containerPort": 8000,
+          "protocol": "tcp"
+        }
+      ],
+      "environment": [
+        { "name": "PORT", "value": "8000" },
+        { "name": "AWS_REGION", "value": "${AWS_REGION}" },
+        { "name": "SAGEMAKER_EXECUTION_ROLE_ARN", "value": "${SAGEMAKER_EXECUTION_ROLE_ARN}" },
+        { "name": "SAGEMAKER_TRAINING_IMAGE_URI", "value": "${SAGEMAKER_TRAINING_IMAGE_URI}" },
+        { "name": "SAGEMAKER_OUTPUT_S3_URI", "value": "${SAGEMAKER_OUTPUT_S3_URI}" },
+        { "name": "SAGEMAKER_INSTANCE_TYPE", "value": "${SAGEMAKER_INSTANCE_TYPE}" },
+        { "name": "SAGEMAKER_MAX_RUNTIME_SECONDS", "value": "${SAGEMAKER_MAX_RUNTIME_SECONDS}" },
+        { "name": "SAGEMAKER_POLL_INTERVAL_SECONDS", "value": "${SAGEMAKER_POLL_INTERVAL_SECONDS}" },
+        { "name": "WANDB_PROJECT", "value": "${WANDB_PROJECT}" },
+        { "name": "WANDB_ENTITY", "value": "${WANDB_ENTITY}" },
+        { "name": "SUPABASE_URL", "value": "${SUPABASE_URL}" },
+        { "name": "NEXT_PUBLIC_SUPABASE_URL", "value": "${NEXT_PUBLIC_SUPABASE_URL}" },
+        { "name": "NEXT_PUBLIC_SUPABASE_ANON_KEY", "value": "${NEXT_PUBLIC_SUPABASE_ANON_KEY}" },
+        { "name": "SUPABASE_STORAGE_URL", "value": "${SUPABASE_STORAGE_URL}" },
+        { "name": "SUPABASE_STORAGE_REGION", "value": "${SUPABASE_STORAGE_REGION}" }
+      ],
+      "secrets": [
+        { "name": "RUNNER_AUTH_TOKEN", "valueFrom": "${SECRET_ARN_RUNNER_AUTH_TOKEN}" },
+        { "name": "E2B_API_KEY", "valueFrom": "${SECRET_ARN_E2B_API_KEY}" },
+        { "name": "OPENAI_API_KEY", "valueFrom": "${SECRET_ARN_OPENAI_API_KEY}" },
+        { "name": "WANDB_API_KEY", "valueFrom": "${SECRET_ARN_WANDB_API_KEY}" },
+        { "name": "KAGGLE_TOKEN", "valueFrom": "${SECRET_ARN_KAGGLE_TOKEN}" },
+        { "name": "SUPABASE_SERVICE_ROLE_KEY", "valueFrom": "${SECRET_ARN_SUPABASE_SERVICE_ROLE_KEY}" },
+        { "name": "POSTGRES_URL", "valueFrom": "${SECRET_ARN_POSTGRES_URL}" },
+        { "name": "SUPABASE_STORAGE_KEY_ID", "valueFrom": "${SECRET_ARN_SUPABASE_STORAGE_KEY_ID}" },
+        { "name": "SUPABASE_STORAGE_SECRET", "valueFrom": "${SECRET_ARN_SUPABASE_STORAGE_SECRET}" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/tuna-runner",
+          "awslogs-region": "${AWS_REGION}",
+          "awslogs-stream-prefix": "ecs"
+        }
+      },
+      "healthCheck": {
+        "command": [
+          "CMD-SHELL",
+          "python -c \"import sys,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8000/', timeout=3); sys.exit(0 if 200 <= r.status < 500 else 1)\""
+        ],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 40
+      }
+    }
+  ]
+}

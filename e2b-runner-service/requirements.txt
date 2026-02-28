@@ -1,0 +1,12 @@
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-dotenv==1.0.1
+supabase==2.10.0
+e2b-code-interpreter>=2.0.0
+e2b-desktop
+openai==1.55.3
+httpx>=0.26,<0.28
+python-multipart
+kaggle
+boto3>=1.34
+wandb>=0.18
