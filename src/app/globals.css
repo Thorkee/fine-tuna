@@ -1051,12 +1051,31 @@ body {
 }
 
 .terminal-viewer .xterm {
-  padding: 12px;
+  padding: 12px 16px;
   height: 100%;
 }
 
 .terminal-viewer .xterm-viewport {
   background: transparent !important;
+  scrollbar-width: thin;
+  scrollbar-color: #30363d transparent;
+}
+
+.terminal-viewer .xterm-viewport::-webkit-scrollbar {
+  width: 6px;
+}
+
+.terminal-viewer .xterm-viewport::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.terminal-viewer .xterm-viewport::-webkit-scrollbar-thumb {
+  background: #30363d;
+  border-radius: 3px;
+}
+
+.terminal-viewer .xterm-viewport::-webkit-scrollbar-thumb:hover {
+  background: #484f58;
 }
 
 .terminal-viewer .xterm-screen {
@@ -1065,6 +1084,38 @@ body {
 
 .terminal-viewer:not(.terminal-viewer--cursor) .xterm-cursor-layer {
   display: none;
+}
+
+/* ============= Streaming Terminal Cursor ============= */
+@keyframes terminalBlink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0; }
+}
+
+.terminal-cursor {
+  display: inline-block;
+  width: 0.55em;
+  height: 1.15em;
+  background: hsl(var(--accent-green));
+  vertical-align: text-bottom;
+  animation: terminalBlink 1s step-end infinite;
+  margin-left: 1px;
+  border-radius: 1px;
+}
+
+@keyframes terminalPromptBlink {
+  0%, 49% { opacity: 1; }
+  50%, 100% { opacity: 0.3; }
+}
+
+.terminal-prompt-cursor {
+  display: inline-block;
+  width: 8px;
+  height: 2px;
+  background: hsl(var(--accent-green));
+  animation: terminalPromptBlink 1.2s step-end infinite;
+  vertical-align: middle;
+  margin-left: 4px;
 }
 
 /* ============= Thinking Block ============= */

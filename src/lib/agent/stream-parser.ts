@@ -400,7 +400,8 @@ export function createStreamParser<T extends StreamMessageLike>(opts: {
       if (closed.length === 0) {
         return { ...m, traceSegments: undefined };
       }
-      const shouldPromote = opts?.promote !== false && !m.content.trim();
+      const answerEmpty = !m.content.trim();
+      const shouldPromote = opts?.promote === true || (opts?.promote !== false && answerEmpty);
       if (!shouldPromote) {
         return { ...m, traceSegments: closed };
       }

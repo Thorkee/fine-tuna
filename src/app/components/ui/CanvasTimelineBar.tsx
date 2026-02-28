@@ -3,6 +3,35 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
 import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
 
+type TimelineFrame = {
+  artifactId: string;
+  artifactType: string;
+  kind: "upsert" | "open";
+};
+
+const ARTIFACT_LABELS: Record<string, string> = {
+  plan: "Plan",
+  analysis: "Analysis",
+  intent: "Intent",
+  research: "Research",
+  curation: "Data Curation",
+  providers: "Provider Comparison",
+  training: "Training",
+  export: "Export",
+  sandbox: "Sandbox",
+  desktop: "Desktop",
+  document: "Document",
+  spreadsheet: "Spreadsheet",
+};
+
+function artifactLabel(id: string): string {
+  return ARTIFACT_LABELS[id] ?? id.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function kindVerb(kind: "upsert" | "open"): string {
+  return kind === "open" ? "Opened" : "Updated";
+}
+
 export default function CanvasTimelineBar(props: {
   maxIndex: number;
   value: number;
@@ -15,6 +44,7 @@ export default function CanvasTimelineBar(props: {
   onJumpToLive: () => void;
   isDark?: boolean;
   variant?: "default" | "compact";
+  frames?: TimelineFrame[];
 }) {
   const {
     maxIndex,
@@ -28,6 +58,7 @@ export default function CanvasTimelineBar(props: {
     onJumpToLive,
     isDark = false,
     variant = "default",
+    frames,
   } = props;
 
   const disabled = maxIndex <= 0;
@@ -66,6 +97,12 @@ export default function CanvasTimelineBar(props: {
     setIsScrubbing(false);
     commit(lastPreviewRef.current);
   }, [commit, isScrubbing]);
+
+  const currentFrame = frames?.[clampedValue];
+  const scrubLabel = useMemo(() => {
+    if (!currentFrame) return "";
+    return `${kindVerb(currentFrame.kind)} ${artifactLabel(currentFrame.artifactId)}`;
+  }, [currentFrame]);
 
   return (
     <div className={`shrink-0 ${isCompact ? "px-3 py-2" : "px-4 py-3"}`}>
@@ -181,12 +218,16 @@ export default function CanvasTimelineBar(props: {
                   : `linear-gradient(to right, ${progressColor} 0%, ${progressColor} ${pct}%, ${trackColor} ${pct}%, ${trackColor} 100%)`,
             }}
           />
-          <div className="mt-1 text-[10px] text-center text-muted">
-            {isScrubbing ? "Scrubbing…" : ""}
+          <div className="mt-1 flex items-center justify-between text-[10px] text-muted min-h-[1em]">
+            <span>
+              {isScrubbing && scrubLabel ? scrubLabel : ""}
+            </span>
+            <span className="tabular-nums">
+              {maxIndex > 0 ? `${clampedValue + 1} / ${maxIndex + 1}` : ""}
+            </span>
           </div>
         </div>
       </div>
     </div>
   );
 }
-

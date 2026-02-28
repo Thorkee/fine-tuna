@@ -20,8 +20,8 @@ import TerminalViewer from "@/app/components/ui/TerminalViewer";
 
 const STATUS_LABELS: Record<string, string> = {
   idle: "Idle",
-  starting: "Starting",
-  uploading: "Uploading",
+  starting: "Starting…",
+  uploading: "Uploading…",
   running: "Running",
   waiting: "Waiting",
   completed: "Completed",
@@ -29,16 +29,7 @@ const STATUS_LABELS: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
-const STATUS_STYLES: Record<string, string> = {
-  idle: "bg-zinc-200 text-zinc-700 dark:bg-white/10 dark:text-zinc-200",
-  starting: "bg-amber-100 text-amber-700 dark:bg-amber-500/15 dark:text-amber-300",
-  uploading: "bg-blue-100 text-blue-700 dark:bg-blue-500/15 dark:text-blue-300",
-  running: "bg-emerald-100 text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-300",
-  waiting: "bg-purple-100 text-purple-700 dark:bg-purple-500/15 dark:text-purple-300",
-  completed: "bg-green-100 text-green-700 dark:bg-green-500/15 dark:text-green-300",
-  failed: "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-300",
-  cancelled: "bg-zinc-100 text-zinc-600 dark:bg-zinc-700/30 dark:text-zinc-300",
-};
+
 
 
 function formatTime(value?: string) {
@@ -52,7 +43,7 @@ function buildTerminalLog(events: SandboxEvent[]): string {
   if (!Array.isArray(events) || events.length === 0) return "";
   const entries = new Map<
     string,
-    { kind: string; label: string; stdout?: string; stderr?: string }
+    { kind: string; label: string; stdout?: string; stderr?: string; status: string; durationMs?: number }
   >();
   const order: string[] = [];
 
@@ -62,26 +53,35 @@ function buildTerminalLog(events: SandboxEvent[]): string {
     if (kind !== "command" && kind !== "exec" && kind !== "pty") continue;
     const id = evt.id || `${kind}-${evt.startedAt}`;
     if (!entries.has(id)) {
-      entries.set(id, { kind, label: evt.label });
+      entries.set(id, { kind, label: evt.label, status: evt.status, durationMs: evt.durationMs });
       order.push(id);
     }
     const entry = entries.get(id);
     if (!entry) continue;
     if (typeof evt.stdout === "string") entry.stdout = evt.stdout;
     if (typeof evt.stderr === "string") entry.stderr = evt.stderr;
+    entry.status = evt.status;
+    if (evt.durationMs !== undefined) entry.durationMs = evt.durationMs;
   }
 
   return order
     .map((id) => {
       const entry = entries.get(id);
       if (!entry) return "";
-      const prompt = entry.kind === "pty" ? "\x1b[1;34m#\x1b[0m" : "\x1b[1;32m$\x1b[0m";
+      const prompt = entry.kind === "pty"
+        ? "\x1b[1;34m#\x1b[0m"
+        : "\x1b[1;32m$\x1b[0m";
       const header = `${prompt} \x1b[1m${entry.label}\x1b[0m`;
       const stdout = entry.stdout ? entry.stdout.trimEnd() : "";
       const stderr = entry.stderr
-        ? `\n\n\x1b[31m--- STDERR ---\x1b[0m\n${entry.stderr.trimEnd()}`
+        ? `\n\x1b[31m--- STDERR ---\x1b[0m\n${entry.stderr.trimEnd()}`
         : "";
-      return [header, stdout, stderr].filter(Boolean).join("\n");
+      const suffix = entry.status === "completed" && entry.durationMs != null
+        ? `\n\x1b[2m[completed in ${(entry.durationMs / 1000).toFixed(1)}s]\x1b[0m`
+        : entry.status === "failed"
+          ? `\n\x1b[31m[exited with error]\x1b[0m`
+          : "";
+      return [header, stdout, stderr, suffix].filter(Boolean).join("\n");
     })
     .filter(Boolean)
     .join("\n\n");
@@ -246,7 +246,7 @@ export function SandboxStateProvider(props: {
         // ignore polling errors; we'll retry
       } finally {
         if (!cancelled) {
-          pollRef.current = window.setTimeout(poll, 2500);
+          pollRef.current = window.setTimeout(poll, 1000);
         }
       }
     };
@@ -368,6 +368,7 @@ export function SandboxTerminalPanel() {
   const {
     status,
     terminalLog,
+    lastCommand,
     fallbackData,
     hasEverHadSession,
     isEmpty,
@@ -386,17 +387,56 @@ export function SandboxTerminalPanel() {
   }
 
   const combined = terminalLog;
+  const isActive = status === "running" || status === "starting" || status === "uploading" || status === "waiting";
+  const isFailed = status === "failed";
+  const statusLabel = STATUS_LABELS[status] ?? "Idle";
+  const titleText = lastCommand
+    ? `${lastCommand.length > 50 ? lastCommand.slice(0, 47) + "…" : lastCommand}`
+    : "Sandbox Terminal";
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2 text-xs text-zinc-500">
-        <span className={`text-[10px] px-2 py-0.5 rounded-full ${STATUS_STYLES[status] || STATUS_STYLES.idle}`}>
-          {STATUS_LABELS[status] ?? "Idle"}
-        </span>
+    <div className="flex flex-col h-full overflow-hidden rounded-xl border border-[#21262d] bg-[#0d1117]">
+      {/* Mac-style terminal header */}
+      <div className="flex items-center gap-3 px-4 py-2.5 bg-[#161b22] border-b border-[#21262d] shrink-0">
+        <div className="flex items-center gap-1.5">
+          <span className="w-3 h-3 rounded-full bg-[#ff5f57] border border-[#e0443e]" />
+          <span className="w-3 h-3 rounded-full bg-[#febc2e] border border-[#dea123]" />
+          <span className="w-3 h-3 rounded-full bg-[#28c840] border border-[#1aab29]" />
+        </div>
+        <div className="flex-1 min-w-0 flex items-center justify-center gap-2">
+          <span className="text-[11px] text-[#8b949e] font-mono truncate">
+            {titleText}
+          </span>
+        </div>
+        <div className="flex items-center gap-1.5">
+          {isActive ? (
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+              <span className="text-[10px] text-emerald-400 font-mono">{statusLabel}</span>
+            </span>
+          ) : isFailed ? (
+            <span className="flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+              <span className="text-[10px] text-red-400 font-mono">{statusLabel}</span>
+            </span>
+          ) : (
+            <span className="text-[10px] text-[#484f58] font-mono">{statusLabel}</span>
+          )}
+        </div>
       </div>
-      <TerminalViewer content={combined || ""} showCursor />
+      {/* Terminal content */}
+      <div className="flex-1 min-h-0">
+        <TerminalViewer
+          content={combined || ""}
+          showCursor={isActive}
+          variant={isFailed ? "error" : "default"}
+          className="!rounded-none !border-0 !min-h-0 h-full"
+        />
+      </div>
       {!combined ? (
-        <div className="text-xs text-zinc-500">No output yet.</div>
+        <div className="px-4 py-3 text-xs text-[#484f58] font-mono border-t border-[#21262d]">
+          Waiting for output…
+        </div>
       ) : null}
     </div>
   );

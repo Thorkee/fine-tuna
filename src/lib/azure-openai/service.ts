@@ -1411,7 +1411,7 @@ Think through:
      * Generate model recommendation based on context
      */
     async recommendModel(
-        requirements: { budget: { min: number; max: number }; timeline: string; accuracyPriority: string },
+        requirements: { budget: { min: number; max: number }; timeline: string; accuracyPriority: string; preferredFamily?: string },
         context: ProjectContext
     ): Promise<ModelRecommendation> {
         const sourcePolicy = buildSourcePolicySettings();
@@ -1469,11 +1469,14 @@ Think through:
             },
         }];
 
+        const familyHint = requirements.preferredFamily
+            ? `\n- Preferred model family: ${requirements.preferredFamily} (sponsor preference; use unless user requests otherwise)`
+            : '';
         const prompt = `
 Based on the user's requirements:
 - Budget: $${requirements.budget.min} - $${requirements.budget.max}
 - Timeline: ${requirements.timeline}
-- Priority: ${requirements.accuracyPriority}
+- Priority: ${requirements.accuracyPriority}${familyHint}
 
 And the data context (${context.edaContext?.statistics.rowCount || 'unknown'} rows, ${context.edaContext?.schema.length || 'unknown'} columns),
 recommend the optimal open-source base model and training configuration.

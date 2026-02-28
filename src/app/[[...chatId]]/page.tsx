@@ -92,6 +92,7 @@ import type {
   RenderBlock,
   TraceSegment,
 } from "@/lib/agent/message-row";
+import { TRACE_PROMOTE_ON_DONE_HEADER } from "@/lib/llm/trace-routing";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { useMediaQuery } from "@/lib/hooks/useMediaQuery";
@@ -1520,8 +1521,8 @@ export function ChatShell() {
     return () => clearThinkingTimer();
   }, [clearThinkingTimer]);
 
-  type ModelPreset = "tuna_1_fast" | "tuna_1" | "tuna_1_high";
-  const MODEL_LABEL_BASE = "Tuna 1.0";
+  type ModelPreset = "mistral_large_3" | "claude_4_6_sonnet" | "claude_4_6_opus";
+  const MODEL_LABEL_BASE = "Mistral Large 3";
   const getModelLabelParts = (label: string) => {
     if (!label.startsWith(MODEL_LABEL_BASE)) {
       return { base: label, variant: "" };
@@ -1536,26 +1537,26 @@ export function ChatShell() {
     reasoningEffort?: "low" | "medium" | "xhigh";
   }[] = [
     {
-      id: "tuna_1_fast",
-      label: MODEL_LABEL_BASE,
-      description: "Quick replies for rapid responses",
+      id: "mistral_large_3",
+      label: `${MODEL_LABEL_BASE} (Default)`,
+      description: "Default model for general tasks",
       reasoningEffort: "low",
-    }, // Lite: default, light reasoning summary
+    },
     {
-      id: "tuna_1",
-      label: `${MODEL_LABEL_BASE} Thinking`,
+      id: "claude_4_6_sonnet",
+      label: "Claude 4.6 Sonnet",
       description: "Balanced speed and depth",
       reasoningEffort: "medium",
-    }, // 1.0: Medium
+    },
     {
-      id: "tuna_1_high",
-      label: `${MODEL_LABEL_BASE} Max`,
+      id: "claude_4_6_opus",
+      label: "Claude 4.6 Opus",
       description: "Deeper thinking for complex work",
       reasoningEffort: "xhigh",
-    }, // 1.0 Pro: xhigh
+    },
   ];
 
-  const [modelPreset, setModelPreset] = useState<ModelPreset>("tuna_1_fast");
+  const [modelPreset, setModelPreset] = useState<ModelPreset>("mistral_large_3");
   const [modelSelectorOpen, setModelSelectorOpen] = useState(false);
   const modelSelectorRef = useRef<HTMLDivElement>(null);
   const activePreset = MODEL_PRESETS.find((p) => p.id === modelPreset);
@@ -1582,7 +1583,7 @@ export function ChatShell() {
         <span className="inline-flex items-center gap-2 max-w-[180px] sm:max-w-[260px] min-w-0">
           <span
             className={`truncate ${
-              modelPreset === "tuna_1_fast" || modelPreset === "tuna_1_high"
+              modelPreset === "mistral_large_3" || modelPreset === "claude_4_6_opus"
                 ? "font-semibold"
                 : "font-medium"
             }`}
@@ -1635,7 +1636,7 @@ export function ChatShell() {
                       <div className="flex items-center gap-2 min-w-0">
                         <div
                           className={`text-[13px] sm:text-sm truncate ${
-                            opt.id === "tuna_1_fast" || opt.id === "tuna_1_high"
+                            opt.id === "mistral_large_3" || opt.id === "claude_4_6_opus"
                               ? "font-semibold"
                               : "font-medium"
                           }`}
@@ -1770,6 +1771,16 @@ export function ChatShell() {
   const canvasTimelineRef = useRef<CanvasTimelineEvent[]>([]);
   const timelineCursorRef = useRef(0);
   const isLiveRef = useRef(true);
+
+  const timelineFrames = useMemo(
+    () =>
+      canvasTimeline.map((evt) => ({
+        artifactId: evt.artifactId,
+        artifactType: evt.artifactType,
+        kind: evt.kind as "upsert" | "open",
+      })),
+    [canvasTimeline]
+  );
 
   useEffect(() => {
     activeArtifactRef.current = activeArtifact;
@@ -3093,8 +3104,18 @@ export function ChatShell() {
   useEffect(() => {
     try {
       const raw = window.localStorage.getItem("tuna.modelPreset");
-      if (raw === "tuna_1_fast" || raw === "tuna_1" || raw === "tuna_1_high") {
+      if (
+        raw === "mistral_large_3" ||
+        raw === "claude_4_6_sonnet" ||
+        raw === "claude_4_6_opus"
+      ) {
         setModelPreset(raw);
+      } else if (raw === "tuna_1_fast") {
+        setModelPreset("mistral_large_3");
+      } else if (raw === "tuna_1") {
+        setModelPreset("claude_4_6_sonnet");
+      } else if (raw === "tuna_1_high") {
+        setModelPreset("claude_4_6_opus");
       }
     } catch {
       // ignore
@@ -4090,11 +4111,15 @@ export function ChatShell() {
         throw err;
       }
 
+      const promoteTraceOnDoneWhenAnswerEmpty =
+        response.headers.get(TRACE_PROMOTE_ON_DONE_HEADER) === "1";
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       startIdleWatch();
       let buffer = "";
       let streamedContent = "";
+      let doneStatusPhase: string | null = null;
+      let doneContentFallback = "";
       let streamHadArtifactMessage = false;
       let streamHadAssistantOutput = false;
       pendingIntentClarificationRef.current = null;
@@ -4676,10 +4701,13 @@ export function ChatShell() {
             parsed && typeof parsed === "object" && "content" in parsed
               ? (parsed as { content?: unknown }).content
               : undefined;
-          // Some coordinator exits (timeouts/errors) return content without streaming deltas.
-          // If we received no content events for this assistant message, apply the fallback here.
-          if (!streamedContent.trim() && typeof doneContent === "string" && doneContent.trim()) {
-            appendAnswerDelta(doneContent);
+          if (parsed && typeof parsed === "object") {
+            const status = (parsed as { status?: { phase?: unknown } }).status;
+            doneStatusPhase =
+              status && typeof status.phase === "string" ? status.phase : doneStatusPhase;
+          }
+          if (typeof doneContent === "string" && doneContent.trim()) {
+            doneContentFallback = doneContent;
           }
           if (parsed && typeof parsed === "object") {
             const ui = (parsed as { ui?: { upserts?: unknown; openArtifactId?: unknown } }).ui;
@@ -4778,7 +4806,22 @@ export function ChatShell() {
         };
       });
 
-      promoteFinalTraceSegment({ promote: false });
+      const activeIdxAfterClose = streamedMessageIndex.get(activeAssistantId);
+      const activeAssistantAfterClose =
+        activeIdxAfterClose !== undefined ? streamedMessages[activeIdxAfterClose] : undefined;
+      const activeAnswerIsEmpty = !activeAssistantAfterClose?.content?.trim();
+      const isDonePhase = doneStatusPhase === "done";
+      const shouldPromoteTrace =
+        (promoteTraceOnDoneWhenAnswerEmpty && isDonePhase && activeAnswerIsEmpty) ||
+        (isDonePhase && activeAnswerIsEmpty);
+      promoteFinalTraceSegment({ promote: shouldPromoteTrace });
+
+      const activeIdxAfterPromotion = streamedMessageIndex.get(activeAssistantId);
+      const activeAssistantAfterPromotion =
+        activeIdxAfterPromotion !== undefined ? streamedMessages[activeIdxAfterPromotion] : undefined;
+      if (!activeAssistantAfterPromotion?.content?.trim() && doneContentFallback.trim()) {
+        appendAnswerDelta(doneContentFallback);
+      }
       flushPersist();
 
       flushPendingIntentClarification({ createAssistantShell: false });
@@ -6059,9 +6102,7 @@ export function ChatShell() {
                                             );
                                           }}
                                           aria-expanded={isOpen}
-                                          className={`flex w-full min-w-0 items-center gap-2 py-1 text-[10px] ${
-                                            isDark ? "text-zinc-500" : "text-zinc-500"
-                                          }`}
+                                          className={`flex w-full min-w-0 items-center gap-2 py-1 text-[10px] text-zinc-500`}
                                         >
                                           <span className="shrink-0 uppercase tracking-[0.2em]">
                                             Reasoning
@@ -6108,8 +6149,10 @@ export function ChatShell() {
                                           </div>
                                         ) : null}
                                         {message.role === "assistant" && hasDisplayContent && hasTraceSegments ? (
-                                          <div className="not-prose mb-1 text-[10px] uppercase tracking-[0.2em] text-zinc-400">
-                                            Answer
+                                          <div className="not-prose mb-1.5 mt-1 flex items-center gap-1.5">
+                                            <div className="h-px flex-1 bg-zinc-200/50 dark:bg-white/5" />
+                                            <span className="text-[10px] text-secondary/40 shrink-0">Response</span>
+                                            <div className="h-px flex-1 bg-zinc-200/50 dark:bg-white/5" />
                                           </div>
                                         ) : null}
                                         {hasDisplayContent ? (
@@ -6292,16 +6335,16 @@ export function ChatShell() {
                                         ? extractedTakeover.stripped
                                         : clarStripped;
                                     if (!traceText.trim()) return null;
-                                    const isOpen =
-                                      segment.status === "streaming" || Boolean(segment.isOpen);
+                                    const isStreaming = segment.status === "streaming";
+                                    const isOpen = isStreaming || Boolean(segment.isOpen);
                                     const compactText = getTraceCompactText(traceText);
-                                    const previewText = compactText || "Trace details";
+                                    const previewText = compactText || "Working…";
                                     return (
                                       <div key={`trace-${segment.id}`} className="not-prose mt-0.5 space-y-0.5">
                                         <button
                                           type="button"
                                           onClick={() => {
-                                            if (segment.status === "streaming") return;
+                                            if (isStreaming) return;
                                             const nextOpen = !isOpen;
                                             setMessages((prev) =>
                                               prev.map((m) => {
@@ -6315,30 +6358,28 @@ export function ChatShell() {
                                             );
                                           }}
                                           aria-expanded={isOpen}
-                                          className={`flex w-full min-w-0 items-center gap-2 py-1 text-[10px] ${
-                                            isDark ? "text-zinc-500" : "text-zinc-500"
+                                          className={`group flex w-full min-w-0 items-center gap-2 py-1 text-[10px] rounded-md transition-colors ${
+                                            isStreaming
+                                              ? "text-secondary/60 cursor-default"
+                                              : "text-secondary/50 hover:text-secondary/80 cursor-pointer"
                                           }`}
                                         >
-                                          <span className="shrink-0 uppercase tracking-[0.2em]">
-                                            Trace
+                                          <span className={`shrink-0 text-[9px] transition-transform ${isOpen ? "rotate-90" : ""}`}>
+                                            ▸
                                           </span>
-                                          {!isOpen ? (
-                                            <span
-                                              className={`min-w-0 flex-1 truncate text-[11px] normal-case ${
-                                                isDark ? "text-zinc-300" : "text-zinc-600"
-                                              }`}
-                                            >
-                                              {renderInlineBoldMarkdown(previewText)}
-                                            </span>
-                                          ) : (
-                                            <span className="flex-1" />
-                                          )}
-                                          {segment.status === "streaming" ? (
-                                            <span className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full bg-current/40" />
+                                          {isStreaming ? (
+                                            <span className="inline-flex h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400 shrink-0" />
                                           ) : null}
+                                          <span
+                                            className={`min-w-0 flex-1 truncate text-[11px] text-left ${
+                                              isDark ? "text-zinc-400" : "text-zinc-500"
+                                            }`}
+                                          >
+                                            {isOpen ? "Progress" : renderInlineBoldMarkdown(previewText)}
+                                          </span>
                                         </button>
                                         {isOpen ? (
-                                          <div className="pl-3">
+                                          <div className={`pl-4 border-l-2 ${isDark ? "border-white/5" : "border-zinc-100"}`}>
                                             {renderTraceMarkdown(traceText)}
                                           </div>
                                         ) : null}
@@ -6392,14 +6433,12 @@ export function ChatShell() {
                       );
                     })}
                     {isTyping && showThinkingIndicator && (
-                      <div className="flex items-center gap-2 pl-4 py-2 opacity-50">
-                        <div className="text-xs text-zinc-500 dark:text-zinc-400">Thinking...</div>
-
-                        <div className="flex space-x-1">
-                          <div className="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce [animation-delay:-0.32s]" />
-                          <div className="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce [animation-delay:-0.16s]" />
-                          <div className="w-1.5 h-1.5 bg-zinc-400 rounded-full animate-bounce" />
-                        </div>
+                      <div className="flex items-center gap-0 pl-4 py-2">
+                        <span className="font-mono text-xs text-emerald-500/70 dark:text-emerald-400/70">$</span>
+                        <span className="ml-1.5 font-mono text-xs text-emerald-400/50 dark:text-emerald-300/50">tuna</span>
+                        <span className="font-mono text-xs text-zinc-500 dark:text-zinc-500 mx-1">—</span>
+                        <span className="font-mono text-xs text-zinc-400 dark:text-zinc-500">processing</span>
+                        <span className="terminal-prompt-cursor" />
                       </div>
                     )}
                     <div ref={setMessagesEndEl} />
@@ -6666,6 +6705,7 @@ export function ChatShell() {
                             isLive={isLive}
                             playback={timelinePlayback}
                             isDark={isDark}
+                            frames={timelineFrames}
                             onScrubPreview={(idx) => {
                               setTimelinePlayback("paused");
                               setCursorAndOpenFrame(idx);
@@ -6764,6 +6804,7 @@ export function ChatShell() {
                           isLive={isLive}
                           playback={timelinePlayback}
                           isDark={isDark}
+                          frames={timelineFrames}
                           onScrubPreview={(idx) => {
                             setTimelinePlayback("paused");
                           setCursorAndOpenFrame(idx);

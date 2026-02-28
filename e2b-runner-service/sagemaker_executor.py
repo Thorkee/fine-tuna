@@ -167,6 +167,15 @@ def run_training_in_sagemaker(
     if wandb.get("run_name"):
         hyperparameters.setdefault("wandb_run_name", str(wandb.get("run_name")))
 
+    environment: Dict[str, str] = {}
+    wandb_api_key = (os.getenv("WANDB_API_KEY") or "").strip()
+    if wandb_api_key:
+        environment["WANDB_API_KEY"] = wandb_api_key
+    if wandb.get("project"):
+        environment.setdefault("WANDB_PROJECT", str(wandb.get("project")))
+    if wandb.get("entity"):
+        environment.setdefault("WANDB_ENTITY", str(wandb.get("entity")))
+
     request: Dict[str, Any] = {
         "TrainingJobName": training_job_name,
         "RoleArn": role_arn,
@@ -184,6 +193,8 @@ def run_training_in_sagemaker(
         "StoppingCondition": {"MaxRuntimeInSeconds": max_runtime_seconds},
         "HyperParameters": hyperparameters,
     }
+    if environment:
+        request["Environment"] = environment
 
     sm_client.create_training_job(**request)
     if on_status_update:

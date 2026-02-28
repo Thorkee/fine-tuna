@@ -175,12 +175,35 @@ function buildConversation(
     return mappings.originalToSafe.get(name) ?? toSafeToolName(name);
   };
 
-  const flushPendingToolResults = () => {
+  const dropDanglingAssistantToolUse = () => {
+    const last = conversation[conversation.length - 1];
+    if (!last || last.role !== 'assistant') return;
+    const current = Array.isArray(last.content) ? last.content : [];
+    const remaining = current.filter(block => !('toolUse' in block));
+    if (remaining.length === current.length) return;
+    if (remaining.length === 0) {
+      conversation.pop();
+      return;
+    }
+    conversation[conversation.length - 1] = {
+      ...last,
+      content: remaining,
+    };
+  };
+
+  const flushPendingToolResults = (mode: 'emit' | 'drop') => {
     if (pendingToolResults.length === 0) return;
-    conversation.push({
-      role: 'user',
-      content: pendingToolResults,
-    });
+    if (mode === 'emit') {
+      conversation.push({
+        role: 'user',
+        content: pendingToolResults,
+      });
+    } else {
+      // If tool results are interrupted by a non-assistant turn, remove the
+      // dangling assistant tool_use blocks from the tail so Bedrock history
+      // stays replayable.
+      dropDanglingAssistantToolUse();
+    }
     pendingToolResults = [];
   };
 
@@ -205,9 +228,6 @@ function buildConversation(
       continue;
     }
 
-    // Any non-tool message closes a pending tool-result bundle.
-    flushPendingToolResults();
-
     const content: BedrockMessage['content'] = [];
     const text = asNonEmptyString(message.content);
     if (text) content.push({ text });
@@ -231,7 +251,21 @@ function buildConversation(
       }
     }
 
-    if (content.length === 0) continue;
+    if (content.length === 0) {
+      // Empty assistant/user messages can appear in persisted history.
+      // If they occur after pending tool results, treat as interruption.
+      if (pendingToolResults.length > 0) {
+        flushPendingToolResults('drop');
+      }
+      continue;
+    }
+
+    if (pendingToolResults.length > 0) {
+      // Bedrock requires tool results to be followed by assistant continuation.
+      // If user intervenes before that, drop the incomplete exchange.
+      flushPendingToolResults(message.role === 'assistant' ? 'emit' : 'drop');
+    }
+
     conversation.push({
       role: message.role === 'assistant' ? 'assistant' : 'user',
       content,
@@ -239,13 +273,45 @@ function buildConversation(
   }
 
   // Flush tool results at end of history as well.
-  flushPendingToolResults();
+  flushPendingToolResults('emit');
+
+  const enforceBedrockToolOrder = (raw: BedrockMessage[]): BedrockMessage[] => {
+    const out: BedrockMessage[] = [];
+
+    const hasToolResult = (m: BedrockMessage): boolean =>
+      m.role === 'user' &&
+      Array.isArray(m.content) &&
+      m.content.some(block => 'toolResult' in block);
+
+    const stripAssistantToolUseTail = () => {
+      const tail = out[out.length - 1];
+      if (!tail || tail.role !== 'assistant' || !Array.isArray(tail.content)) return;
+      const remaining = tail.content.filter(block => !('toolUse' in block));
+      if (remaining.length === tail.content.length) return;
+      if (remaining.length === 0) {
+        out.pop();
+        return;
+      }
+      out[out.length - 1] = { ...tail, content: remaining };
+    };
+
+    for (const current of raw) {
+      const prev = out[out.length - 1];
+      if (prev && hasToolResult(prev) && current.role !== 'assistant') {
+        // Drop dangling tool_result turn and its paired assistant tool_use tail.
+        out.pop();
+        stripAssistantToolUseTail();
+      }
+      out.push(current);
+    }
+    return out;
+  };
 
   const system = systemLines.length > 0
     ? [{ text: systemLines.join('\n\n') }]
     : undefined;
 
-  return { system, conversation };
+  return { system, conversation: enforceBedrockToolOrder(conversation) };
 }
 
 function extractTextFromResponseContent(content: ContentBlock[] | undefined): string {
@@ -280,11 +346,91 @@ export class BedrockLlmService {
     return modelId;
   }
 
+  private resolveLoginCacheCredentials(): {
+    accessKeyId: string;
+    secretAccessKey: string;
+    sessionToken: string;
+    expiration?: Date;
+  } | null {
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const fs = require('fs') as typeof import('fs');
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      const path = require('path') as typeof import('path');
+      const cacheDir = path.join(
+        process.env.HOME || process.env.USERPROFILE || '/root',
+        '.aws', 'login', 'cache'
+      );
+      if (!fs.existsSync(cacheDir)) return null;
+      const files = fs.readdirSync(cacheDir).filter((f: string) => f.endsWith('.json'));
+      let best: { accessKeyId: string; secretAccessKey: string; sessionToken: string; expiration?: Date } | null = null;
+      let bestExpiry = 0;
+      for (const file of files) {
+        try {
+          const raw = JSON.parse(fs.readFileSync(path.join(cacheDir, file), 'utf-8'));
+          const token = raw?.accessToken ?? raw;
+          if (typeof token?.accessKeyId !== 'string') continue;
+          if (typeof token?.secretAccessKey !== 'string') continue;
+          if (typeof token?.sessionToken !== 'string') continue;
+          const expiry = token.expiresAt ? new Date(token.expiresAt).getTime() : 0;
+          if (expiry > bestExpiry) {
+            bestExpiry = expiry;
+            best = {
+              accessKeyId: token.accessKeyId,
+              secretAccessKey: token.secretAccessKey,
+              sessionToken: token.sessionToken,
+              expiration: expiry ? new Date(expiry) : undefined,
+            };
+          }
+        } catch { /* skip malformed cache entries */ }
+      }
+      if (best && bestExpiry > Date.now()) return best;
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   private getClient(): BedrockRuntimeClient {
     if (!this.client) {
-      this.client = new BedrockRuntimeClient({ region: this.getRegion() });
+      const loginCreds = this.resolveLoginCacheCredentials();
+      const clientOpts: ConstructorParameters<typeof BedrockRuntimeClient>[0] = {
+        region: this.getRegion(),
+      };
+      if (loginCreds) {
+        clientOpts.credentials = loginCreds;
+      }
+      this.client = new BedrockRuntimeClient(clientOpts);
     }
     return this.client;
+  }
+
+  /** Discard the cached client so the next call creates a fresh one
+   *  (picks up rotated/refreshed credentials from the environment). */
+  resetClient(): void {
+    this.client = null;
+  }
+
+  private isExpiredTokenError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err);
+    const lower = msg.toLowerCase();
+    if (lower.includes('expired') && (lower.includes('token') || lower.includes('credential'))) return true;
+    if (lower.includes('could not load credentials')) return true;
+    return false;
+  }
+
+  /** Wrap a Bedrock SDK call: on expired-token errors, reset the client
+   *  and retry once with a fresh credential chain. */
+  private async withCredentialRetry<T>(fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (err) {
+      if (this.isExpiredTokenError(err)) {
+        this.resetClient();
+        return fn();
+      }
+      throw err;
+    }
   }
 
   async chat(
@@ -294,18 +440,20 @@ export class BedrockLlmService {
   ): Promise<string> {
     const modelId = this.getModelId();
     const { system, conversation } = buildConversation(messages);
-    const response = await withTimeout(options?.timeoutMs, (signal) =>
-      this.getClient().send(
-        new ConverseCommand({
-          modelId,
-          system,
-          messages: conversation,
-          inferenceConfig: {
-            maxTokens: options?.maxTokens ?? 4096,
-            temperature: options?.temperature ?? 0.2,
-          },
-        }),
-        { abortSignal: signal }
+    const response = await this.withCredentialRetry(() =>
+      withTimeout(options?.timeoutMs, (signal) =>
+        this.getClient().send(
+          new ConverseCommand({
+            modelId,
+            system,
+            messages: conversation,
+            inferenceConfig: {
+              maxTokens: options?.maxTokens ?? 4096,
+              temperature: options?.temperature ?? 0.2,
+            },
+          }),
+          { abortSignal: signal }
+        )
       )
     );
 
@@ -331,20 +479,22 @@ export class BedrockLlmService {
         ? { tool: { name: tools[0]?.toolSpec?.name || '' } }
         : undefined;
 
-    const response = await this.getClient().send(
-      new ConverseCommand({
-        modelId,
-        system,
-        messages: conversation,
-        toolConfig: {
-          tools,
-          toolChoice,
-        },
-        inferenceConfig: {
-          maxTokens: 4096,
-          temperature: 0.2,
-        },
-      })
+    const response = await this.withCredentialRetry(() =>
+      this.getClient().send(
+        new ConverseCommand({
+          modelId,
+          system,
+          messages: conversation,
+          toolConfig: {
+            tools,
+            toolChoice,
+          },
+          inferenceConfig: {
+            maxTokens: 4096,
+            temperature: 0.2,
+          },
+        })
+      )
     );
 
     const usage = normalizeUsage(response.usage, modelId);
@@ -374,26 +524,27 @@ export class BedrockLlmService {
     const modelId = this.getModelId();
     const { tools: bedrockTools, mappings } = buildToolConfig(tools);
     const { system, conversation } = buildConversation(messages, mappings);
-    const client = this.getClient();
 
-    const response = await withTimeout(options?.timeoutMs, (signal) =>
-      client.send(
-        new ConverseStreamCommand({
-          modelId,
-          system,
-          messages: conversation,
-          toolConfig:
-            bedrockTools.length > 0
-              ? {
-                  tools: bedrockTools,
-                }
-              : undefined,
-          inferenceConfig: {
-            maxTokens: options?.maxTokens ?? 4096,
-            temperature: options?.temperature ?? 0.2,
-          },
-        }),
-        { abortSignal: signal }
+    const response = await this.withCredentialRetry(() =>
+      withTimeout(options?.timeoutMs, (signal) =>
+        this.getClient().send(
+          new ConverseStreamCommand({
+            modelId,
+            system,
+            messages: conversation,
+            toolConfig:
+              bedrockTools.length > 0
+                ? {
+                    tools: bedrockTools,
+                  }
+                : undefined,
+            inferenceConfig: {
+              maxTokens: options?.maxTokens ?? 4096,
+              temperature: options?.temperature ?? 0.2,
+            },
+          }),
+          { abortSignal: signal }
+        )
       )
     );
 
@@ -474,7 +625,7 @@ export class BedrockLlmService {
 
   // Keep model recommendation behavior stable while Bedrock runtime is rolled out.
   async recommendModel(
-    requirements: { budget: { min: number; max: number }; timeline: string; accuracyPriority: string },
+    requirements: { budget: { min: number; max: number }; timeline: string; accuracyPriority: string; preferredFamily?: string },
     context: ProjectContext
   ): Promise<ModelRecommendation> {
     return gptService.recommendModel(requirements, context);

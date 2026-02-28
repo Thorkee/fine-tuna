@@ -15,15 +15,34 @@ type TerminalViewerProps = {
 };
 
 const BASE_THEME = {
-  background: "#0f1115",
-  foreground: "#d6dae1",
-  cursor: "#9ba3af",
-  selectionBackground: "#1f2632",
+  background: "#0d1117",
+  foreground: "#c9d1d9",
+  cursor: "#58a6ff",
+  cursorAccent: "#0d1117",
+  selectionBackground: "#264f78",
+  selectionForeground: "#ffffff",
+  black: "#484f58",
+  red: "#ff7b72",
+  green: "#3fb950",
+  yellow: "#d29922",
+  blue: "#58a6ff",
+  magenta: "#bc8cff",
+  cyan: "#39c5cf",
+  white: "#c9d1d9",
+  brightBlack: "#6e7681",
+  brightRed: "#ffa198",
+  brightGreen: "#56d364",
+  brightYellow: "#e3b341",
+  brightBlue: "#79c0ff",
+  brightMagenta: "#d2a8ff",
+  brightCyan: "#56d4dd",
+  brightWhite: "#f0f6fc",
 };
 
 const ERROR_THEME = {
   ...BASE_THEME,
-  foreground: "#f2b8b5",
+  foreground: "#ffa198",
+  cursor: "#ff7b72",
 };
 
 const FALLBACK_DIMENSIONS = {
@@ -90,79 +109,86 @@ export default function TerminalViewer({
   const containerRef = useRef<HTMLDivElement | null>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitRef = useRef<FitAddon | null>(null);
-  const flushContentRef = useRef<() => void>(() => {});
-  const pendingContentRef = useRef<string | null>(null);
   const lastRenderedContentRef = useRef("");
-  const reflowRequestedRef = useRef(false);
   const isWritingRef = useRef(false);
   const disposedRef = useRef(false);
+  const pendingWriteRef = useRef<string | null>(null);
 
-  const flushContent = useCallback(() => {
-    if (disposedRef.current) return;
-    const term = terminalRef.current;
+  const doFit = useCallback(() => {
     const fitAddon = fitRef.current;
-    const container = containerRef.current;
-    if (!term || !fitAddon || !container) return;
-    if (isWritingRef.current) return;
-
-    let proposed: { cols: number; rows: number } | undefined;
-    try {
-      proposed = fitAddon.proposeDimensions?.();
-    } catch {
-      // xterm may throw if renderer is temporarily unavailable (eg. during teardown)
-      return;
-    }
-    if (!proposed || proposed.cols < MIN_RENDER_COLS || proposed.rows < MIN_RENDER_ROWS) return;
-
-    const pending = pendingContentRef.current;
-    const hasPending = pending !== null;
-    const shouldReflow = reflowRequestedRef.current && !hasPending;
-    const nextContent = hasPending ? pending : shouldReflow ? lastRenderedContentRef.current : null;
-    if (nextContent === null) return;
-    pendingContentRef.current = null;
-    reflowRequestedRef.current = false;
-    isWritingRef.current = true;
-
+    if (!fitAddon || disposedRef.current) return;
     try {
       fitAddon.fit();
     } catch {
       // ignore fit errors during layout churn
     }
-
-    try {
-      term.reset();
-      term.write(nextContent, () => {
-        isWritingRef.current = false;
-        if (disposedRef.current) return;
-        if (terminalRef.current !== term) return;
-        lastRenderedContentRef.current = nextContent;
-        try {
-          const beforeCols = term.cols;
-          const beforeRows = term.rows;
-          fitAddon.fit();
-          if (
-            (term.cols !== beforeCols || term.rows !== beforeRows) &&
-            pendingContentRef.current === null &&
-            nextContent.length > 0
-          ) {
-            reflowRequestedRef.current = true;
-          }
-          term.refresh(0, Math.max(term.rows - 1, 0));
-        } catch {
-          // ignore
-        }
-        if (pendingContentRef.current !== null || reflowRequestedRef.current) {
-          queueMicrotask(() => flushContentRef.current());
-        }
-      });
-    } catch {
-      isWritingRef.current = false;
-    }
   }, []);
 
-  useEffect(() => {
-    flushContentRef.current = flushContent;
-  }, [flushContent]);
+  const writeIncremental = useCallback(() => {
+    if (disposedRef.current) return;
+    const term = terminalRef.current;
+    const fitAddon = fitRef.current;
+    if (!term || !fitAddon) return;
+    if (isWritingRef.current) return;
+
+    const nextContent = pendingWriteRef.current;
+    if (nextContent === null) return;
+    pendingWriteRef.current = null;
+
+    let proposed: { cols: number; rows: number } | undefined;
+    try {
+      proposed = fitAddon.proposeDimensions?.();
+    } catch {
+      return;
+    }
+    if (!proposed || proposed.cols < MIN_RENDER_COLS || proposed.rows < MIN_RENDER_ROWS) return;
+
+    const prev = lastRenderedContentRef.current;
+
+    if (nextContent.startsWith(prev) && prev.length > 0) {
+      const delta = nextContent.slice(prev.length);
+      if (delta) {
+        isWritingRef.current = true;
+        try {
+          term.write(delta, () => {
+            isWritingRef.current = false;
+            if (disposedRef.current) return;
+            lastRenderedContentRef.current = nextContent;
+            doFit();
+            if (pendingWriteRef.current !== null) {
+              queueMicrotask(() => writeIncremental());
+            }
+          });
+        } catch {
+          isWritingRef.current = false;
+        }
+      } else {
+        lastRenderedContentRef.current = nextContent;
+      }
+    } else {
+      isWritingRef.current = true;
+      try {
+        doFit();
+        term.reset();
+        term.write(nextContent, () => {
+          isWritingRef.current = false;
+          if (disposedRef.current) return;
+          lastRenderedContentRef.current = nextContent;
+          try {
+            doFit();
+            term.refresh(0, Math.max(term.rows - 1, 0));
+          } catch {
+            // ignore
+          }
+          if (pendingWriteRef.current !== null) {
+            queueMicrotask(() => writeIncremental());
+          }
+        });
+      } catch {
+        isWritingRef.current = false;
+      }
+    }
+  }, [doFit]);
 
   useEffect(() => {
     const container = containerRef.current;
@@ -172,18 +198,22 @@ export default function TerminalViewer({
     const term = new Terminal({
       theme: BASE_THEME,
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace",
-      fontSize: 12,
-      lineHeight: 1.35,
+      fontSize: 13,
+      lineHeight: 1.4,
+      letterSpacing: 0,
       disableStdin: true,
       convertEol: true,
-      scrollback: 2000,
+      scrollback: 5000,
+      cursorBlink: showCursor,
+      cursorStyle: "block",
+      cursorInactiveStyle: "block",
+      smoothScrollDuration: 100,
     });
     const fitAddon = new FitAddon();
     term.loadAddon(fitAddon);
     term.open(container);
     installSafeXtermDimensions(term);
-    // Fit can run before layout settles (width=0 → MINIMUM_COLS=2).
-    // Schedule a few fits until the container has real size.
+
     let raf = 0;
     let tries = 0;
     const scheduleFit = () => {
@@ -192,21 +222,12 @@ export default function TerminalViewer({
       raf = window.requestAnimationFrame(() => {
         if (disposedRef.current) return;
         tries += 1;
-        const prevCols = term.cols;
-        const prevRows = term.rows;
         try {
           fitAddon.fit();
         } catch {
-          // ignore fit errors during teardown
+          // ignore
         }
-        if (
-          (term.cols !== prevCols || term.rows !== prevRows) &&
-          pendingContentRef.current === null &&
-          lastRenderedContentRef.current.length > 0
-        ) {
-          reflowRequestedRef.current = true;
-        }
-        flushContent();
+        writeIncremental();
         const rect = container.getBoundingClientRect();
         const tooSmall = rect.width < 80 || rect.height < 80;
         if (tooSmall && tries < 10) {
@@ -221,9 +242,7 @@ export default function TerminalViewer({
           if (disposedRef.current) return;
           scheduleFit();
         })
-        .catch(() => {
-          // ignore font readiness errors
-        });
+        .catch(() => {});
     }
 
     terminalRef.current = term;
@@ -238,12 +257,10 @@ export default function TerminalViewer({
       disposedRef.current = true;
       window.cancelAnimationFrame(raf);
       resizeObserver.disconnect();
-      // Make any pending microtasks/RAF no-op before disposal.
       terminalRef.current = null;
       fitRef.current = null;
-      pendingContentRef.current = null;
+      pendingWriteRef.current = null;
       lastRenderedContentRef.current = "";
-      reflowRequestedRef.current = false;
       isWritingRef.current = false;
       try {
         fitAddon.dispose();
@@ -256,7 +273,7 @@ export default function TerminalViewer({
         // ignore
       }
     };
-  }, [flushContent]);
+  }, [showCursor, writeIncremental]);
 
   useEffect(() => {
     const term = terminalRef.current;
@@ -269,15 +286,15 @@ export default function TerminalViewer({
   }, [variant]);
 
   useEffect(() => {
-    pendingContentRef.current = content;
-    flushContent();
-  }, [content, flushContent]);
+    pendingWriteRef.current = content;
+    writeIncremental();
+  }, [content, writeIncremental]);
 
   return (
     <div
       ref={containerRef}
       className={cn(
-        "terminal-viewer h-full min-h-[200px] w-full overflow-hidden rounded-xl border border-default bg-[#0f1115]",
+        "terminal-viewer h-full min-h-[200px] w-full overflow-hidden rounded-xl border border-default bg-[#0d1117]",
         showCursor ? "terminal-viewer--cursor" : null,
         className
       )}

@@ -19,6 +19,7 @@ import type { McpRuntimeServerConfig } from "@/lib/mcp/runtime";
 import { parseProfileContext, resolvePreferredMode } from "@/lib/profile/profile-context";
 import { getConfiguredLlmProvider } from "@/lib/llm/provider";
 import { getMissingLlmServerEnv, hasInvalidLlmServerEnv } from "@/lib/llm/runtime";
+import { resolveTraceRoutingPolicy, TRACE_PROMOTE_ON_DONE_HEADER } from "@/lib/llm/trace-routing";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -172,6 +173,11 @@ function buildSafeErrorPayload(error: unknown): StreamErrorPayload {
 
 export async function POST(req: NextRequest) {
   const encoder = new TextEncoder();
+  const configuredProvider = getConfiguredLlmProvider();
+  const traceRoutingPolicy = resolveTraceRoutingPolicy({
+    provider: configuredProvider,
+    modelId: process.env.AWS_BEDROCK_MODEL_ID,
+  });
   const payload = await req.json().catch(() => ({}));
   const message = typeof payload.message === "string" ? payload.message : "";
   const history = Array.isArray(payload.history) ? payload.history : [];
@@ -421,7 +427,7 @@ export async function POST(req: NextRequest) {
 
       try {
         startHeartbeat();
-        const provider = getConfiguredLlmProvider();
+        const provider = configuredProvider;
         const missingEnv = getMissingServerEnv(provider);
         const invalidProviderEnv = hasInvalidProviderEnv(provider);
         if (missingEnv.length > 0 || invalidProviderEnv) {
@@ -764,12 +770,22 @@ export async function POST(req: NextRequest) {
         });
         await finalizeBilling({ sendUsageEvent: true, outcome: "done" });
 
-        if (!assistantMessage.content.trim() && typeof result.content === "string" && result.content.trim()) {
-          streamParser.appendAnswerDelta(result.content);
-        }
         streamParser.flushStreamBuffer();
         streamParser.closeActiveTraceSegment();
         streamParser.closeActiveReasoningSegment();
+        const isDone = result.status?.phase === "done";
+        const shouldPromoteFinalTrace =
+          traceRoutingPolicy.promoteTraceOnDoneWhenAnswerEmpty && isDone;
+        if (shouldPromoteFinalTrace && !assistantMessage.content.trim()) {
+          streamParser.promoteFinalTraceSegment({ promote: true });
+        } else if (!assistantMessage.content.trim() && isDone) {
+          streamParser.promoteFinalTraceSegment();
+        } else {
+          streamParser.promoteFinalTraceSegment({ promote: false });
+        }
+        if (!assistantMessage.content.trim() && typeof result.content === "string" && result.content.trim()) {
+          streamParser.appendAnswerDelta(result.content);
+        }
         await flushPersist();
 
         if (runId) {
@@ -816,6 +832,7 @@ export async function POST(req: NextRequest) {
       "Content-Type": "text/event-stream",
       "Cache-Control": "no-cache, no-transform",
       Connection: "keep-alive",
+      [TRACE_PROMOTE_ON_DONE_HEADER]: traceRoutingPolicy.promoteTraceOnDoneWhenAnswerEmpty ? "1" : "0",
     },
   });
 }
