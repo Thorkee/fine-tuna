@@ -402,11 +402,6 @@ The Next.js app proxies the runner under `src/app/api/runner/**` so runner URLs/
 
 - **App env vars (server-only):** `E2B_RUNNER_URL`, `E2B_RUNNER_TOKEN`, `E2B_RUNNER_TIMEOUT_MS` (see `.env.example`)
 - **Runner service setup + API docs:** `e2b-runner-service/README.md`
-- **What’s wired today:** `E2B_CAPABILITIES.md`
-- **Guardrails:** `E2B_SESSION_GUARDRAILS.md`
-- **Desktop design notes:** `E2B_DESKTOP_MVP.md`
-- **Implementation roadmap:** `E2B_EXECUTION_ROADMAP.md`
-- **Validation snapshot:** `E2B_VALIDATION_MATRIX.md`
 
 #### Runner flow
 
@@ -672,7 +667,6 @@ Use these env vars to tune behavior (server-side only):
 See:
 
 - `DATASET_SOURCE_POLICY.md`
-- `MODEL_SELECTION_ROADMAP.md`
 
 ### API routes (overview)
 
