@@ -237,28 +237,19 @@ export class TunaInfraStack extends cdk.Stack {
     // Grant execution role read access to all secrets
     Object.values(secrets).forEach((s) => s.grantRead(executionRole));
 
-    // App task role: Bedrock inference
-    const appTaskRole = new iam.Role(this, "AppTaskRole", {
-      roleName: "tuna-app-task-role",
-      assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
-    });
-    appTaskRole.addToPolicy(
-      new iam.PolicyStatement({
-        actions: [
-          "bedrock:InvokeModel",
-          "bedrock:InvokeModelWithResponseStream",
-        ],
-        resources: [
-          `arn:aws:bedrock:${REGION}::foundation-model/*`,
-        ],
-      })
+    // App task role: Bedrock inference (pre-existing — import)
+    const appTaskRole = iam.Role.fromRoleName(
+      this,
+      "AppTaskRole",
+      "tuna-app-task-role"
     );
 
-    // Runner task role: SageMaker + S3 + CloudWatch + ECR
-    const runnerTaskRole = new iam.Role(this, "RunnerTaskRole", {
-      roleName: "tuna-runner-task-role",
-      assumedBy: new iam.ServicePrincipal("ecs-tasks.amazonaws.com"),
-    });
+    // Runner task role: SageMaker + S3 + CloudWatch + ECR (pre-existing — import)
+    const runnerTaskRole = iam.Role.fromRoleName(
+      this,
+      "RunnerTaskRole",
+      "tuna-runner-task-role"
+    );
 
     // SageMaker execution role (pre-existing — import)
     const sagemakerRole = iam.Role.fromRoleName(
@@ -267,46 +258,8 @@ export class TunaInfraStack extends cdk.Stack {
       "tuna-sagemaker-execution-role"
     );
 
-    // Runner task role policies
-    runnerTaskRole.addToPolicy(
-      new iam.PolicyStatement({
-        actions: [
-          "sagemaker:CreateTrainingJob",
-          "sagemaker:DescribeTrainingJob",
-          "sagemaker:StopTrainingJob",
-          "sagemaker:ListTrainingJobs",
-          "sagemaker:DescribeAlgorithm",
-          "sagemaker:ListTags",
-        ],
-        resources: ["*"],
-      })
-    );
-    runnerTaskRole.addToPolicy(
-      new iam.PolicyStatement({
-        actions: ["iam:PassRole"],
-        resources: [sagemakerRole.roleArn],
-        conditions: {
-          StringEquals: {
-            "iam:PassedToService": "sagemaker.amazonaws.com",
-          },
-        },
-      })
-    );
-    trainingBucket.grantReadWrite(runnerTaskRole);
-    runnerTaskRole.addToPolicy(
-      new iam.PolicyStatement({
-        actions: [
-          "logs:DescribeLogGroups",
-          "logs:DescribeLogStreams",
-          "logs:GetLogEvents",
-          "logs:FilterLogEvents",
-        ],
-        resources: [
-          `arn:aws:logs:${REGION}:${ACCOUNT}:log-group:/aws/sagemaker/TrainingJobs:*`,
-        ],
-      })
-    );
-    sagemakerRepo.grantPull(runnerTaskRole);
+    // NOTE: Runner task role policies (SageMaker, S3, CloudWatch, ECR, PassRole)
+    // are managed on the pre-existing role. No additions needed here.
 
     // -------------------------------------------------------
     // ECS Task Definitions
