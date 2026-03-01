@@ -30,13 +30,20 @@ Minimum runtime permissions:
   - `sagemaker:CreateTrainingJob`
   - `sagemaker:DescribeTrainingJob`
   - `sagemaker:StopTrainingJob`
-  - `sagemaker:ListTrainingJobs` (optional, diagnostics)
+  - `sagemaker:ListTrainingJobs`
+  - `sagemaker:DescribeAlgorithm`
+  - `sagemaker:ListTags`
 - Pass role for training jobs:
   - `iam:PassRole` scoped to `SAGEMAKER_EXECUTION_ROLE_ARN`
   - Condition: `iam:PassedToService = sagemaker.amazonaws.com`
 - S3 access for training input/output prefixes used by runner:
   - `s3:ListBucket` on target buckets
   - `s3:GetObject`, `s3:PutObject`, `s3:DeleteObject` on approved prefixes
+- CloudWatch Logs read (for fetching training container logs on failure):
+  - `logs:DescribeLogGroups`, `logs:DescribeLogStreams`, `logs:GetLogEvents`, `logs:FilterLogEvents`
+  - Scoped to `arn:aws:logs:*:*:log-group:/aws/sagemaker/TrainingJobs:*`
+- ECR pull (if runner needs direct image access):
+  - `ecr:GetAuthorizationToken`, `ecr:BatchCheckLayerAvailability`, `ecr:GetDownloadUrlForLayer`, `ecr:BatchGetImage`
 
 ## 4) SageMaker execution role (`SAGEMAKER_EXECUTION_ROLE_ARN`)
 
@@ -46,12 +53,19 @@ Minimum permissions:
 - Read training inputs from approved S3 prefixes.
 - Write model artifacts to `SAGEMAKER_OUTPUT_S3_URI`.
 - Pull training image from ECR (if using private ECR image).
-- Optional: CloudWatch logs permissions for training job logs.
+- CloudWatch logs permissions for training job logs:
+  - `logs:CreateLogGroup`, `logs:CreateLogStream`, `logs:PutLogEvents`
+  - `logs:DescribeLogGroups`, `logs:DescribeLogStreams`, `logs:GetLogEvents`
+  - Scoped to `arn:aws:logs:*:*:log-group:/aws/sagemaker/*`
+- CloudWatch metrics (optional):
+  - `cloudwatch:PutMetricData` with namespace condition `/aws/sagemaker/TrainingJobs`
 
 ## 5) Validation gates before rollout
 
 - [ ] Execution roles can fetch every configured secret ARN.
 - [ ] App task role can invoke Bedrock model(s) in target region.
 - [ ] Runner task role can create + describe + stop a SageMaker training job.
+- [ ] Runner task role can read CloudWatch logs under `/aws/sagemaker/TrainingJobs`.
 - [ ] `iam:PassRole` is scoped and works only for the intended SageMaker execution role.
+- [ ] SageMaker execution role can write logs to CloudWatch.
 - [ ] No wildcard `*` actions/resources remain unless documented and approved.

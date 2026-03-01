@@ -84,22 +84,24 @@ def _fetch_cloudwatch_logs(job_name: str, region: str, max_bytes: int = 50_000) 
         streams_resp = logs_client.describe_log_streams(
             logGroupName=log_group,
             logStreamNamePrefix=job_name,
-            orderBy="LastEventTime",
-            descending=True,
+            orderBy="LogStreamName",
+            descending=False,
             limit=5,
         )
         streams = streams_resp.get("logStreams", [])
         if not streams:
             return ""
-        events_resp = logs_client.get_log_events(
-            logGroupName=log_group,
-            logStreamName=streams[0]["logStreamName"],
-            startFromHead=False,
-            limit=200,
-        )
-        events = events_resp.get("events", [])
-        lines = [e.get("message", "") for e in events]
-        text = "\n".join(lines)
+        all_lines: list[str] = []
+        for stream in streams:
+            events_resp = logs_client.get_log_events(
+                logGroupName=log_group,
+                logStreamName=stream["logStreamName"],
+                startFromHead=False,
+                limit=200,
+            )
+            events = events_resp.get("events", [])
+            all_lines.extend(e.get("message", "") for e in events)
+        text = "\n".join(all_lines)
         return text[-max_bytes:] if len(text) > max_bytes else text
     except Exception as exc:
         return f"(Could not fetch CloudWatch logs: {exc})"
