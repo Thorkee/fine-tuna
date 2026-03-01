@@ -41,3 +41,49 @@ docker push ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/tuna-sagemaker-training:late
 ```
 
 The runner service references this image via `SAGEMAKER_TRAINING_IMAGE_URI`.
+
+## Runner Service (ECS/Fargate)
+
+After modifying `e2b-runner-service/` code (runner.py, sagemaker_executor.py, etc.), rebuild and deploy:
+
+```bash
+cd e2b-runner-service
+
+# Authenticate Docker to ECR (replace ACCOUNT_ID and REGION)
+aws ecr get-login-password --region REGION | \
+  docker login --username AWS --password-stdin ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com
+
+# Build for linux/amd64 (required for Fargate)
+docker build --platform linux/amd64 -t tuna-runner:latest .
+
+# Tag and push
+docker tag tuna-runner:latest \
+  ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/tuna-runner:latest
+docker push ACCOUNT_ID.dkr.ecr.REGION.amazonaws.com/tuna-runner:latest
+
+# Force a rolling deployment on ECS
+aws ecs update-service \
+  --cluster CLUSTER_NAME \
+  --service tuna-runner \
+  --force-new-deployment \
+  --region REGION
+```
+
+After deployment, the runner task's public IP can be found via:
+
+```bash
+# Get task ARN
+TASK_ARN=$(aws ecs list-tasks --cluster CLUSTER_NAME --service-name tuna-runner --region REGION --query 'taskArns[0]' --output text)
+
+# Get ENI ID
+ENI_ID=$(aws ecs describe-tasks --cluster CLUSTER_NAME --tasks $TASK_ARN --region REGION \
+  --query 'tasks[0].attachments[0].details[?name==`networkInterfaceId`].value' --output text)
+
+# Get public IP
+aws ec2 describe-network-interfaces --network-interface-ids $ENI_ID --region REGION \
+  --query 'NetworkInterfaces[0].Association.PublicIp' --output text
+```
+
+Update `E2B_RUNNER_URL` in the app's `.env.local` to `http://<public-ip>:8000`.
+
+Health check: `GET http://<public-ip>:8000/` (no auth required).

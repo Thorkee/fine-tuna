@@ -219,6 +219,8 @@ class DesktopSessionManager:
         for evt in entry.events:
             if evt.get("seq") == seq:
                 evt.update(patch)
+                evt["updated_seq"] = entry.next_seq
+                entry.next_seq += 1
                 return
 
     def cleanup_expired(self) -> None:
@@ -334,10 +336,18 @@ class DesktopSessionManager:
         }
 
     def list_events(self, entry: DesktopSessionEntry, after: int = 0, limit: int = 200) -> Dict[str, Any]:
-        events = [e for e in entry.events if isinstance(e.get("seq"), int) and e["seq"] > after]
+        events = [
+            e for e in entry.events
+            if isinstance(e.get("seq"), int)
+            and (e["seq"] > after or (isinstance(e.get("updated_seq"), int) and e["updated_seq"] > after))
+        ]
         if limit > 0:
             events = events[:limit]
-        next_after = events[-1]["seq"] if events else after
+        max_seq = max(
+            (e.get("updated_seq") or e["seq"] for e in events),
+            default=after,
+        )
+        next_after = max(after, max_seq)
         return {"desktop_session_id": entry.id, "events": events, "next_after": next_after}
 
 

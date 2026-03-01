@@ -239,7 +239,9 @@ export function SandboxStateProvider(props: {
             ? data.events.map(normalizeRunnerEvent)
             : [];
           if (events.length > 0) {
-            afterRef.current = typeof data.next_after === "number" ? data.next_after : afterRef.current;
+            afterRef.current = typeof data.next_after === "number"
+              ? Math.max(afterRef.current, data.next_after)
+              : afterRef.current;
             setLiveState((prev) =>
               mergeSandboxState(prev ?? emptySandboxState(), {
                 events,

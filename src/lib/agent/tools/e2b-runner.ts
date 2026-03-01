@@ -751,17 +751,17 @@ type SageMakerExecutionRef = {
 const inputRefToolSchema = {
     type: 'object',
     description:
-        'File reference. Provide at least one of: url, storagePath, text, base64. Optionally set name/bucket/mimeType.',
+        'File reference. Provide ONE of: text (preferred for agent-generated content), url (for public links), storagePath (ONLY for user-uploaded files in this chat — path must start with userId/chatId/), or base64.',
     properties: {
         name: { type: 'string', description: 'Optional filename override.' },
         url: { type: 'string', description: 'Publicly reachable URL (https://...) to fetch.' },
         storagePath: {
             type: 'string',
             description:
-                'Supabase Storage object path. If bucket=uploads, must be scoped to the current chat (userId/chatId prefix).',
+                'Supabase Storage path for files already uploaded to this chat. MUST start with "{userId}/{chatId}/". Do NOT guess — only use paths from file upload metadata.',
         },
         bucket: { type: 'string', enum: ['uploads', 'artifacts'], description: 'Storage bucket for storagePath.' },
-        text: { type: 'string', description: 'Inline UTF-8 content.' },
+        text: { type: 'string', description: 'Inline UTF-8 content. PREFERRED for scripts and small data you generate.' },
         base64: { type: 'string', description: 'Inline base64-encoded content.' },
         mimeType: { type: 'string', description: 'Optional MIME type (e.g. text/csv, text/x-python).' },
     },

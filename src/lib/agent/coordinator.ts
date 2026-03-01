@@ -2268,6 +2268,17 @@ FINETUNING DEFAULTS:
 - When selecting base models for fine-tuning, prefer Mistral-family models (Mistral, Mixtral, Magistral, Devstral) unless the user explicitly requests otherwise.
 - Default training backend is AWS SageMaker; fall back to sandbox execution only if SageMaker is not configured.
 - Enable Weights & Biases experiment tracking by default when WANDB_API_KEY is available.
+
+TRAINING_SUBMIT INPUT RULES (CRITICAL — follow exactly):
+- The \`input\` and \`script\` fields accept an InputRef object. You MUST use the correct InputRef variant:
+  • For training scripts: ALWAYS use \`{ "name": "train.py", "text": "<script content>" }\`. Write the script inline via "text".
+  • For small datasets (<1MB): use \`{ "name": "data.csv", "text": "<csv content>" }\` with inline content.
+  • For Hugging Face datasets: use the \`hfDatasets\` field (e.g. \`[{ "repo": "owner/dataset" }]\`), NOT the \`input\` field. The dataset will be prefetched and available via HF_DATASET_DIR env var in the training script.
+  • For files the user uploaded in this chat: use \`{ "storagePath": "<the exact path from the upload>" }\`. The storagePath MUST start with "{userId}/{chatId}/" — you can find this in the file attachment metadata.
+  • For public URLs: use \`{ "url": "https://..." }\`.
+- NEVER fabricate or guess a storagePath. If you don't have the exact path from a file upload, use "text" or "url" instead.
+- NEVER use storagePath for files you created in a sandbox session — those are not in Supabase storage.
+- When using hfDatasets for the dataset source, still provide a minimal placeholder for the required \`input\` field: \`{ "name": "placeholder.txt", "text": "Dataset loaded via hfDatasets prefetch" }\`.
 `.trim();
 
     private buildSystemPrompt(

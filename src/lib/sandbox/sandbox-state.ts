@@ -117,7 +117,17 @@ export function mergeSandboxState(
     for (const evt of incomingEvents) {
       const id = normalizeEventId(evt);
       const prev = eventMap.get(id);
-      eventMap.set(id, prev ? { ...prev, ...evt } : evt);
+      if (prev) {
+        const merged = { ...prev };
+        for (const [k, v] of Object.entries(evt)) {
+          if (v !== undefined) {
+            (merged as Record<string, unknown>)[k] = v;
+          }
+        }
+        eventMap.set(id, merged);
+      } else {
+        eventMap.set(id, evt);
+      }
     }
     next.events = Array.from(eventMap.values()).sort((a, b) => {
       const aSeq = typeof a.seq === "number" ? a.seq : Number.POSITIVE_INFINITY;
