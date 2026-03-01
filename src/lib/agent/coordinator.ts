@@ -54,6 +54,7 @@ import {
     hfJobRunTool,
     hfJobStatusTool,
     hfSpaceRunTool,
+    hfModelPushTool,
 } from './tools/huggingface';
 import { importDocxTool, upsertDocumentHtmlTool, exportDocxTool } from './tools/documents';
 import {
@@ -906,6 +907,7 @@ export class AgentCoordinator {
         registry.registerTool(hfJobStatusTool);
         registry.registerTool(hfJobLogsTool);
         registry.registerTool(hfJobCancelTool);
+        registry.registerTool(hfModelPushTool);
         registry.registerTool(importDocxTool);
         registry.registerTool(upsertDocumentHtmlTool);
         registry.registerTool(exportDocxTool);

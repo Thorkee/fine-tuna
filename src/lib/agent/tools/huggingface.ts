@@ -1,9 +1,10 @@
 import 'server-only';
 
 import { z } from 'zod';
-import { randomUUID } from 'crypto';
+import { randomUUID, createHash } from 'crypto';
 import type { AgentContext, Tool, ToolExecutionResult } from '../types';
 import { getIntegrationToken } from '@/lib/integrations/tokens';
+import { downloadStorageObject } from '@/lib/supabase/storage';
 
 const HF_BASE_URL = 'https://huggingface.co';
 const HF_DATASET_SERVER = 'https://datasets-server.huggingface.co';
@@ -1891,5 +1892,294 @@ export const hfJobCancelTool: Tool = {
                 { type: 'ui.openArtifact', payload: { id: 'training', type: 'markdown' } },
             ],
         };
+    },
+};
+// ================== Model Push to HF Hub ==================
+
+const hfModelPushArgsSchema = z.object({
+    modelStoragePath: z.string().min(1),
+    repoId: z.string().min(1),
+    repoPrivate: z.boolean().optional(),
+    commitMessage: z.preprocess(trimToUndefined, z.string().min(1).optional()),
+    branch: z.preprocess(trimToUndefined, z.string().min(1).optional()),
+}).strict();
+
+async function getHfWhoAmI(token: string): Promise<string | undefined> {
+    const resp = await fetchJsonWithTimeout(`${HF_BASE_URL}/api/whoami-v2`, {
+        headers: buildAuthHeaders(token),
+    }, 8_000);
+    if (!resp.ok || !isRecord(resp.data)) return undefined;
+    const name = resp.data.name;
+    return typeof name === 'string' ? name.trim() : undefined;
+}
+
+async function ensureHfRepo(params: {
+    repoId: string;
+    repoPrivate: boolean;
+    token: string;
+}): Promise<{ created: boolean; url: string }> {
+    const parts = params.repoId.split('/');
+    const name = parts[parts.length - 1];
+    const organization = parts.length >= 2 ? parts[0] : undefined;
+
+    const body: Record<string, unknown> = { type: 'model', name, private: params.repoPrivate };
+    if (organization) body.organization = organization;
+
+    const resp = await fetchJsonWithTimeout(`${HF_BASE_URL}/api/repos/create`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...buildAuthHeaders(params.token) },
+        body: JSON.stringify(body),
+    }, 15_000);
+
+    if (resp.status === 409) {
+        return { created: false, url: `${HF_BASE_URL}/${params.repoId}` };
+    }
+    if (!resp.ok) {
+        throw new Error(`Failed to create HF repo: ${resp.message}`);
+    }
+    return { created: true, url: `${HF_BASE_URL}/${params.repoId}` };
+}
+
+function buildMultipartBody(
+    boundary: string,
+    parts: Array<{ name: string; filename?: string; contentType: string; body: Buffer | string }>
+): Buffer {
+    const buffers: Buffer[] = [];
+    for (const part of parts) {
+        buffers.push(Buffer.from(`--${boundary}\r\n`));
+        let disposition = `Content-Disposition: form-data; name="${part.name}"`;
+        if (part.filename) {
+            disposition += `; filename="${part.filename.replace(/"/g, '\\"')}"`;
+        }
+        buffers.push(Buffer.from(`${disposition}\r\n`));
+        buffers.push(Buffer.from(`Content-Type: ${part.contentType}\r\n\r\n`));
+        buffers.push(Buffer.isBuffer(part.body) ? part.body : Buffer.from(part.body, 'utf-8'));
+        buffers.push(Buffer.from('\r\n'));
+    }
+    buffers.push(Buffer.from(`--${boundary}--\r\n`));
+    return Buffer.concat(buffers);
+}
+
+async function pushFileToHfRepo(params: {
+    repoId: string;
+    fileName: string;
+    fileBuffer: Buffer;
+    token: string;
+    branch: string;
+    commitMessage: string;
+}): Promise<void> {
+    const { repoId, fileName, fileBuffer, token, branch, commitMessage } = params;
+    const size = fileBuffer.length;
+    const sha256 = createHash('sha256').update(fileBuffer).digest('hex');
+    const sampleB64 = fileBuffer.slice(0, Math.min(128, size)).toString('base64');
+
+    // Step 1: preupload — HF tells us whether the file needs LFS or can go inline
+    const preuploadResp = await fetchJsonWithTimeout(
+        `${HF_BASE_URL}/api/models/${repoId}/preupload/${branch}`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', ...buildAuthHeaders(token) },
+            body: JSON.stringify({ files: [{ path: fileName, size, sample: sampleB64 }] }),
+        },
+        20_000
+    );
+    if (!preuploadResp.ok) {
+        throw new Error(`HF preupload failed: ${preuploadResp.message}`);
+    }
+
+    const preuploadData = preuploadResp.data;
+    const files = isRecord(preuploadData) && Array.isArray(preuploadData.files) ? preuploadData.files : [];
+    const fileInfo = isRecord(files[0]) ? files[0] : {};
+    const uploadMode = typeof fileInfo.uploadMode === 'string' ? fileInfo.uploadMode : 'lfs';
+    const isLfs = uploadMode !== 'regular';
+
+    if (isLfs) {
+        // Step 2: PUT the binary to the LFS endpoint
+        const lfsUploadUrl =
+            typeof fileInfo.upload_url === 'string' ? fileInfo.upload_url :
+                typeof fileInfo.uploadUrl === 'string' ? fileInfo.uploadUrl : '';
+        if (!lfsUploadUrl) throw new Error('No LFS upload URL returned by HF preupload');
+
+        const lfsResp = await fetch(lfsUploadUrl, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/octet-stream', 'Content-Length': String(size) },
+            body: fileBuffer,
+        });
+        if (!lfsResp.ok) {
+            const errText = await lfsResp.text().catch(() => '');
+            throw new Error(`LFS upload failed (${lfsResp.status}): ${errText || lfsResp.statusText}`);
+        }
+    }
+
+    // Step 3: commit — lfsFile part for LFS-tracked files, file part for regular files
+    const boundary = `----HFBoundary${Date.now()}${Math.random().toString(36).slice(2)}`;
+    const commitHeaderJson = JSON.stringify({ summary: commitMessage, description: '', parentCommit: null });
+
+    const multipartParts: Array<{ name: string; filename?: string; contentType: string; body: Buffer | string }> = [
+        { name: 'header', contentType: 'application/json', body: commitHeaderJson },
+    ];
+
+    if (isLfs) {
+        multipartParts.push({
+            name: 'lfsFile',
+            filename: fileName,
+            contentType: 'application/json',
+            body: JSON.stringify({ oid: sha256, size }),
+        });
+    } else {
+        multipartParts.push({
+            name: 'file',
+            filename: fileName,
+            contentType: 'application/octet-stream',
+            body: fileBuffer,
+        });
+    }
+
+    const multipartBody = buildMultipartBody(boundary, multipartParts);
+
+    const commitResp = await fetchJsonWithTimeout(
+        `${HF_BASE_URL}/api/models/${repoId}/commit/${branch}`,
+        {
+            method: 'POST',
+            headers: {
+                'Content-Type': `multipart/form-data; boundary=${boundary}`,
+                ...buildAuthHeaders(token),
+            },
+            body: multipartBody as unknown as BodyInit,
+        },
+        60_000
+    );
+    if (!commitResp.ok) {
+        throw new Error(`HF commit failed: ${commitResp.message}`);
+    }
+}
+
+export const hfModelPushTool: Tool = {
+    category: 'ml',
+    definition: {
+        name: 'hf_model_push',
+        description:
+            'Push a trained model from storage (S3/Supabase bucket) to a Hugging Face model repository. ' +
+            'Automatically creates the HF repo if it does not exist, then uploads the model file via the HF Hub API. ' +
+            'Use this after training completes and the model file is stored (modelStoragePath from training_download).',
+        parameters: {
+            type: 'object',
+            properties: {
+                modelStoragePath: {
+                    type: 'string',
+                    description: 'Storage path of the model file, e.g. "runner-outputs/{chatId}/{taskId}/model.bin".',
+                },
+                repoId: {
+                    type: 'string',
+                    description: 'HF repo to push to. Use "my-model" to create under the authenticated user, or "owner/my-model" for a specific namespace.',
+                },
+                repoPrivate: {
+                    type: 'boolean',
+                    description: 'Create the repo as private. Defaults to false.',
+                },
+                commitMessage: {
+                    type: 'string',
+                    description: 'Commit message. Defaults to "Upload model weights".',
+                },
+                branch: {
+                    type: 'string',
+                    description: 'Branch to push to. Defaults to "main".',
+                },
+            },
+            required: ['modelStoragePath', 'repoId'],
+        },
+    },
+    handler: async (args: unknown, context: AgentContext): Promise<ToolExecutionResult> => {
+        const parsed = hfModelPushArgsSchema.safeParse(args);
+        if (!parsed.success) {
+            return { ok: false, error: { name: 'ValidationError', message: parsed.error.message } };
+        }
+
+        const token = await resolveHfToken(context);
+        if (!token) {
+            return {
+                ok: false,
+                error: {
+                    name: 'AuthError',
+                    message: 'No Hugging Face token found. Connect your HF account or set HUGGINGFACE_TOKEN.',
+                },
+            };
+        }
+
+        const { modelStoragePath, repoPrivate = false, branch = 'main' } = parsed.data;
+        const commitMessage = parsed.data.commitMessage || 'Upload model weights';
+        const performedAt = new Date().toISOString();
+        const fileName = modelStoragePath.split('/').pop() || 'model.bin';
+
+        // Resolve full repoId — prepend authenticated username if only a slug was given
+        let repoId = parsed.data.repoId.trim();
+        if (!repoId.includes('/')) {
+            const username = await getHfWhoAmI(token);
+            if (username) repoId = `${username}/${repoId}`;
+        }
+
+        try {
+            // 1. Create HF repo (409 = already exists, which is fine)
+            const { created, url: repoUrl } = await ensureHfRepo({ repoId, repoPrivate, token });
+
+            // 2. Download model from S3 storage bucket
+            let fileBuffer: Buffer;
+            try {
+                fileBuffer = await downloadStorageObject('artifacts', modelStoragePath);
+            } catch (err) {
+                const msg = err instanceof Error ? err.message : String(err);
+                return {
+                    ok: false,
+                    error: { name: 'StorageError', message: `Failed to download model from storage: ${msg}` },
+                };
+            }
+
+            // 3. Push to HF Hub: preupload → LFS upload → commit
+            await pushFileToHfRepo({ repoId, fileName, fileBuffer, token, branch, commitMessage });
+
+            const markdown = [
+                '## Model Pushed to Hugging Face',
+                '',
+                `**Repository:** [${repoId}](${HF_BASE_URL}/${repoId})`,
+                `**File:** \`${fileName}\``,
+                `**Branch:** \`${branch}\``,
+                `**Status:** ${created ? 'Created new repo and pushed' : 'Pushed to existing repo'}`,
+                `**Performed at:** ${performedAt}`,
+            ].join('\n');
+
+            const canvasData = {
+                kind: 'hf_model_push_v1',
+                performedAt,
+                repoId,
+                repoUrl,
+                fileName,
+                branch,
+                created,
+                commitMessage,
+                markdown,
+            };
+
+            return {
+                ok: true,
+                data: canvasData,
+                sideEffects: [
+                    {
+                        type: 'ui.upsertArtifact',
+                        payload: {
+                            id: 'training',
+                            type: 'markdown',
+                            title: 'Hugging Face Push',
+                            content: canvasData,
+                            status: 'final',
+                            isCollaborative: false,
+                        },
+                    },
+                    { type: 'ui.openArtifact', payload: { id: 'training' } },
+                ],
+            };
+        } catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            return { ok: false, error: { name: 'HfPushError', message } };
+        }
     },
 };
