@@ -9,7 +9,7 @@ export type MetricPoint = {
   [key: string]: number | undefined;
 };
 
-const KNOWN_ALIASES: Record<string, keyof MetricPoint> = {
+const KNOWN_ALIASES: Record<string, string> = {
   loss: "loss",
   train_loss: "loss",
   training_loss: "loss",
