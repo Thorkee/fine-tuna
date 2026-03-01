@@ -24,7 +24,7 @@ import DataAnalysisArtifact from "@/app/components/artifacts/DataAnalysisArtifac
 import IntentArtifact from "@/app/components/artifacts/IntentArtifact";
 import ResearchArtifact, { CurationArtifact } from "@/app/components/artifacts/ResearchArtifact";
 import ProviderComparisonArtifact from "@/app/components/artifacts/ProviderComparisonArtifact";
-import TrainingArtifact from "@/app/components/artifacts/TrainingArtifact";
+import TrainingArtifact, { TrainingPanelBadge } from "@/app/components/artifacts/TrainingArtifact";
 import ExportArtifact from "@/app/components/artifacts/ExportArtifact";
 import DesktopArtifact from "@/app/components/artifacts/DesktopArtifact";
 import {
@@ -2117,6 +2117,7 @@ export function ChatShell() {
               >
                 {getPanelLabel(panelId)}
               </button>
+              {panelId === "training" ? <TrainingPanelBadge /> : null}
               {isDeliverable ? (
                 <span className="shrink-0 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-emerald-600 dark:border-emerald-400/30 dark:bg-emerald-400/10 dark:text-emerald-300">
                   Deliverable
@@ -2133,7 +2134,15 @@ export function ChatShell() {
               </button>
             ) : null}
           </div>
-          <div className="p-3">{content}</div>
+          <div
+            className={
+              panelId === "sandbox-terminal" || panelId === "sandbox"
+                ? "p-3 flex flex-col min-h-[420px]"
+                : "p-3"
+            }
+          >
+            {content}
+          </div>
         </div>
       );
     },

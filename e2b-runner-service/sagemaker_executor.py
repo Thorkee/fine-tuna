@@ -208,10 +208,26 @@ def run_training_in_sagemaker(
     else:
         training_job_name = _safe_channel_name(f"tuna-{task_id.hex[:8]}-{int(time.time())}", "tuna-training")
 
-    instance_type = (cfg.get("instance_type") or os.getenv("SAGEMAKER_INSTANCE_TYPE") or "ml.g5.xlarge").strip()
+    instance_type = (cfg.get("instance_type") or os.getenv("SAGEMAKER_INSTANCE_TYPE") or "ml.p4d.24xlarge").strip()
+
+    _VALID_INSTANCE_PREFIXES = (
+        "ml.p2.", "ml.p3.", "ml.p3dn.", "ml.p4d.", "ml.p4de.", "ml.p5.",
+        "ml.g4dn.", "ml.g5.", "ml.g6.",
+        "ml.m4.", "ml.m5.", "ml.m6i.", "ml.m7i.",
+        "ml.c4.", "ml.c5.", "ml.c5n.", "ml.c6i.", "ml.c7i.",
+        "ml.r5.", "ml.r6i.",
+        "ml.trn1.", "ml.trn1n.", "ml.trn2.",
+        "ml.inf1.", "ml.inf2.",
+    )
+    if not instance_type.startswith(_VALID_INSTANCE_PREFIXES):
+        raise SageMakerExecutionError(
+            f"Invalid SageMaker training instance type: '{instance_type}'. "
+            f"Must be a valid ml.* training instance (e.g. ml.p4d.24xlarge, ml.g5.2xlarge, ml.m5.xlarge). "
+            f"Families like ml.t2/t3 do not exist for SageMaker training."
+        )
     instance_count = _parse_positive_int(cfg.get("instance_count"), 1)
-    volume_size_gb = _parse_positive_int(cfg.get("volume_size_gb"), 100)
-    default_runtime = _parse_positive_int(os.getenv("SAGEMAKER_MAX_RUNTIME_SECONDS"), 7_200)
+    volume_size_gb = _parse_positive_int(cfg.get("volume_size_gb"), 1000)
+    default_runtime = _parse_positive_int(os.getenv("SAGEMAKER_MAX_RUNTIME_SECONDS"), 28_800)
     max_runtime_seconds = _parse_positive_int(cfg.get("max_runtime_seconds"), default_runtime)
     if timeout_seconds and timeout_seconds > 0:
         max_runtime_seconds = min(max_runtime_seconds, int(timeout_seconds))

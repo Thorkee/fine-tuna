@@ -1,0 +1,10 @@
+{
+  "TunaInfraStack": {
+    "AlbDnsName": "tuna-alb-1330354163.us-east-1.elb.amazonaws.com",
+    "SagemakerRoleArn": "arn:aws:iam::272861537879:role/tuna-sagemaker-execution-role",
+    "SagemakerEcrUri": "272861537879.dkr.ecr.us-east-1.amazonaws.com/tuna-sagemaker-training",
+    "AppEcrUri": "272861537879.dkr.ecr.us-east-1.amazonaws.com/tuna-app",
+    "RunnerEcrUri": "272861537879.dkr.ecr.us-east-1.amazonaws.com/tuna-runner",
+    "CertArn": "arn:aws:acm:us-east-1:272861537879:certificate/11de5009-916f-45f5-aaa6-05f70f10010f"
+  }
+}

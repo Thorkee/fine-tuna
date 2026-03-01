@@ -834,7 +834,7 @@ const sageMakerExecutionToolSchema = {
         trainingJobName: { type: 'string', description: 'Optional explicit SageMaker TrainingJobName.' },
         executionRoleArn: { type: 'string', description: 'Override execution role ARN (server validates permissions).' },
         imageUri: { type: 'string', description: 'Training image URI.' },
-        instanceType: { type: 'string', description: 'SageMaker instance type (for example ml.g5.2xlarge).' },
+        instanceType: { type: 'string', description: 'SageMaker instance type. Leave unset to use the server default (ml.p4d.24xlarge). Only override with a valid SageMaker training instance (e.g. ml.g5.2xlarge, ml.p3.2xlarge, ml.m5.xlarge). Do NOT use non-existent types like ml.t3.*.' },
         instanceCount: { type: 'number', description: 'Number of instances (default 1).' },
         volumeSizeGb: { type: 'number', description: 'EBS volume size in GiB.' },
         maxRuntimeSeconds: { type: 'number', description: 'Max runtime for the training job.' },
@@ -1614,7 +1614,7 @@ export const trainingStatusTool: Tool = {
     category: 'data',
     definition: {
         name: 'training_status',
-        description: 'Poll the current status (pending/running/completed/failed) and truncated stdout/stderr for a training taskId.',
+        description: 'Poll the current status (pending/running/completed/failed) and truncated stdout/stderr for a training taskId. Call this immediately after training_submit and keep calling it in a tight loop until the job reaches completed or failed — do NOT announce delays or wait times between polls.',
         parameters: {
             type: 'object',
             properties: {

@@ -11,6 +11,57 @@ import TrainingCurveChart from "@/app/components/artifacts/TrainingCurveChart";
 import { useProjectArtifacts } from "@/lib/hooks/useProjectArtifacts";
 import { parseTrainingMetrics } from "@/lib/training/parse-metrics";
 
+function formatElapsed(ms: number): string {
+    const totalSec = Math.floor(ms / 1000);
+    const h = Math.floor(totalSec / 3600);
+    const m = Math.floor((totalSec % 3600) / 60);
+    const s = totalSec % 60;
+    if (h > 0) return `${h}h ${m}m ${s}s`;
+    if (m > 0) return `${m}m ${s}s`;
+    return `${s}s`;
+}
+
+export function TrainingPanelBadge() {
+    const { artifacts } = useProjectArtifacts();
+    const trainingData = useMemo(() => {
+        const a = artifacts.find(x => x.id === "training");
+        const d = a?.data;
+        return d && typeof d === "object" ? (d as Record<string, unknown>) : null;
+    }, [artifacts]);
+
+    const status = typeof trainingData?.status === "string" ? trainingData.status : "";
+    const startedAt = typeof trainingData?.createdAt === "string"
+        ? trainingData.createdAt
+        : typeof trainingData?.updatedAt === "string"
+            ? trainingData.updatedAt
+            : null;
+
+    const [elapsed, setElapsed] = useState("");
+
+    useEffect(() => {
+        if (status !== "pending" && status !== "running") return;
+        const origin = startedAt ? new Date(startedAt).getTime() : Date.now();
+        const base = Number.isNaN(origin) ? Date.now() : origin;
+
+        const tick = () => setElapsed(formatElapsed(Date.now() - base));
+        tick();
+        const id = window.setInterval(tick, 1000);
+        return () => window.clearInterval(id);
+    }, [status, startedAt]);
+
+    if (status !== "pending" && status !== "running") return null;
+
+    return (
+        <span className="inline-flex items-center gap-1.5 text-[10px] text-blue-600 dark:text-blue-400">
+            <span className="relative flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-blue-500" />
+            </span>
+            {elapsed && <span className="tabular-nums">{elapsed}</span>}
+        </span>
+    );
+}
+
 export default function TrainingArtifact(props: { dataOverride?: unknown } = {}) {
     const dataOverride = props.dataOverride;
     const { artifacts } = useProjectArtifacts();

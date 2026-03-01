@@ -1647,7 +1647,15 @@ export default function SharedChatReplay(props: { shareId: string }) {
               </button>
             ) : null}
           </div>
-          <div className="p-3">{content}</div>
+          <div
+            className={
+              panelId === "sandbox-terminal" || panelId === "sandbox"
+                ? "p-3 flex flex-col min-h-[420px]"
+                : "p-3"
+            }
+          >
+            {content}
+          </div>
         </div>
       );
     },
