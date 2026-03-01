@@ -10,6 +10,12 @@ interface ChatCodeArtifactProps {
     onOpenSandboxPanel?: () => void;
 }
 
+function hasSandboxMetadata(code: string): boolean {
+    return code.split('\n').some(
+        line => line.trim().startsWith('# Title:') || line.trim().startsWith('# Summary:')
+    );
+}
+
 export default function ChatCodeArtifact({
     language,
     code,
@@ -18,26 +24,10 @@ export default function ChatCodeArtifact({
 }: ChatCodeArtifactProps) {
     const { setSandboxCode } = useProjectArtifacts();
 
-    // Extract Title and Summary from comments
-    const lines = code.split('\n');
-    let title = language === 'python' ? 'Analysis' : 'Code';
-    let summary = '';
+    const isSandboxPython = language === 'python' && hasSandboxMetadata(code);
 
-    for (const line of lines) {
-        if (line.trim().startsWith('# Title:')) {
-            title = line.replace('# Title:', '').trim();
-        } else if (line.trim().startsWith('# Summary:')) {
-            summary = line.replace('# Summary:', '').trim();
-        }
-    }
-
-    // Fallback summary if not found
-    if (!summary) {
-        const firstRealLine = lines.find(l => l.trim().length > 0 && !l.trim().startsWith('#'));
-        summary = firstRealLine ? firstRealLine.substring(0, 60) + (firstRealLine.length > 60 ? '...' : '') : '';
-    }
-
-    if (language !== 'python') {
+    // For non-sandbox code (any language, or Python without sandbox markers), show as a normal code block
+    if (!isSandboxPython) {
         return (
             <pre
                 className={`not-prose my-1.5 max-w-full p-3 rounded-xl font-mono text-[12px] overflow-x-auto whitespace-pre glass-inset ${isDark
@@ -48,6 +38,24 @@ export default function ChatCodeArtifact({
                 <code className={`language-${language}`}>{code}</code>
             </pre>
         );
+    }
+
+    // Sandbox-intended Python: extract metadata and show compact card
+    const lines = code.split('\n');
+    let title = 'Analysis';
+    let summary = '';
+
+    for (const line of lines) {
+        if (line.trim().startsWith('# Title:')) {
+            title = line.replace('# Title:', '').trim();
+        } else if (line.trim().startsWith('# Summary:')) {
+            summary = line.replace('# Summary:', '').trim();
+        }
+    }
+
+    if (!summary) {
+        const firstRealLine = lines.find(l => l.trim().length > 0 && !l.trim().startsWith('#'));
+        summary = firstRealLine ? firstRealLine.substring(0, 60) + (firstRealLine.length > 60 ? '...' : '') : '';
     }
 
     const handleOpenSandbox = () => {
@@ -100,7 +108,6 @@ export default function ChatCodeArtifact({
                 ) : null}
             </div>
 
-            {/* Hidden code block for accessibility/SEO but not visible */}
             <div className="hidden">{code}</div>
         </div>
     );

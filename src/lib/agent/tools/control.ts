@@ -15,7 +15,7 @@ const planStepInputSchema = z.object({
     toolNeeds: z.array(z.string().min(1)).optional(),
     verification: z.string().min(1).optional(),
     rollback: z.string().min(1).optional(),
-}).strict();
+}).strip();
 
 const setPlanArgsSchema = z.object({
     goal: z.string().min(1),
